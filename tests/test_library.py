@@ -3,7 +3,10 @@
 # Created for TagStudio: https://github.com/CyanVoxel/TagStudio
 
 
+import shutil
+import sqlite3
 from collections.abc import Callable
+from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -108,6 +111,81 @@ def test_library_supports_duplicate_relative_paths_per_root(library: Library):
         entry for entry in library.all_entries() if entry.folder_id == secondary.id
     )
     assert library.resolve_entry_path(secondary_entry) == secondary.path / "same.txt"
+
+
+def test_library_roots_are_relative_and_relocatable():
+    with TemporaryDirectory() as temp_dir:
+        original_root = Path(temp_dir) / "original"
+        secondary_root = original_root / "secondary"
+        secondary_root.mkdir(parents=True)
+
+        library = Library()
+        assert library.open_library(original_root).success
+        secondary = library.add_root(secondary_root)
+        assert library.add_entries([Entry(path=Path("same.txt"), folder=secondary, fields=[])])
+        library.close()
+
+        database_path = original_root / ".TagStudio" / "ts_library.sqlite"
+        with closing(sqlite3.connect(database_path)) as connection:
+            assert connection.execute("SELECT path FROM folders ORDER BY id").fetchall() == [
+                (".",),
+                ("secondary",),
+            ]
+
+        relocated_root = Path(temp_dir) / "relocated"
+        shutil.copytree(original_root, relocated_root)
+
+        reopened = Library()
+        assert reopened.open_library(relocated_root).success
+        assert [folder.path for folder in reopened.folders] == [
+            relocated_root.resolve(),
+            (relocated_root / "secondary").resolve(),
+        ]
+        entry = list(reopened.all_entries())[0]
+        assert reopened.resolve_entry_path(entry) == relocated_root / "secondary" / "same.txt"
+        reopened.close()
+
+
+def test_legacy_absolute_roots_are_rebased_during_relocation():
+    with TemporaryDirectory() as temp_dir:
+        original_root = Path(temp_dir) / "original"
+        secondary_root = original_root / "secondary"
+        secondary_root.mkdir(parents=True)
+
+        library = Library()
+        assert library.open_library(original_root).success
+        secondary = library.add_root(secondary_root)
+        assert library.add_entries([Entry(path=Path("same.txt"), folder=secondary, fields=[])])
+        library.close()
+
+        database_path = original_root / ".TagStudio" / "ts_library.sqlite"
+        with closing(sqlite3.connect(database_path)) as connection:
+            connection.execute(
+                "UPDATE folders SET path = ? WHERE id = 1", (str(original_root.resolve()),)
+            )
+            connection.execute(
+                "UPDATE folders SET path = ? WHERE id = 2", (str(secondary_root.resolve()),)
+            )
+            connection.execute("UPDATE versions SET value = 105 WHERE key = 'CURRENT'")
+            connection.execute("UPDATE preferences SET value = 105 WHERE key = 'DB_VERSION'")
+            connection.execute("DELETE FROM schema_migrations WHERE revision = 106")
+            connection.commit()
+
+        relocated_root = Path(temp_dir) / "relocated"
+        shutil.copytree(original_root, relocated_root)
+
+        reopened = Library()
+        assert reopened.open_library(relocated_root).success
+        with closing(
+            sqlite3.connect(relocated_root / ".TagStudio" / "ts_library.sqlite")
+        ) as connection:
+            assert connection.execute("SELECT path FROM folders ORDER BY id").fetchall() == [
+                (".",),
+                ("secondary",),
+            ]
+        entry = list(reopened.all_entries())[0]
+        assert reopened.resolve_entry_path(entry) == relocated_root / "secondary" / "same.txt"
+        reopened.close()
 
 
 @pytest.mark.parametrize("library", [TemporaryDirectory()], indirect=True)

@@ -185,6 +185,8 @@ class Tag(Base):
 
 
 class Folder(Base):
+    """A configured scan root, stored relative to the library whenever possible."""
+
     __tablename__ = "folders"
 
     id: Mapped[int] = mapped_column(primary_key=True)

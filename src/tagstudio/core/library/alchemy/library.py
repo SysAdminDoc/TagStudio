@@ -15,6 +15,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from os import makedirs
+from os.path import relpath
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -390,14 +391,51 @@ class Library:
     def __canonical_root(root: Path) -> Path:
         return Path(root).expanduser().resolve(strict=False)
 
+    def __resolve_folder_path(self, path: Path, base: Path | None = None) -> Path:
+        """Resolve a persisted root path against the currently opened library."""
+        path = Path(path)
+        if path.is_absolute():
+            return self.__canonical_root(path)
+        if base is None:
+            if self.library_dir is None:
+                raise ValueError("No library directory is configured.")
+            base = self.library_dir
+        return self.__canonical_root(Path(base) / path)
+
+    def __relative_folder_path(self, root: Path, base: Path | None = None) -> Path:
+        """Convert a root to a path that can move with this library database."""
+        if base is None:
+            if self.library_dir is None:
+                raise ValueError("No library directory is configured.")
+            base = self.library_dir
+
+        canonical_root = self.__canonical_root(root)
+        canonical_base = self.__canonical_root(base)
+        try:
+            relative = canonical_root.relative_to(canonical_base)
+        except ValueError:
+            try:
+                relative = Path(relpath(canonical_root, canonical_base))
+            except ValueError as error:
+                # A different volume has no meaningful relative path. Keep the absolute
+                # location as an unavoidable external-root fallback so multi-root libraries
+                # continue to work; roots on the library volume remain fully relocatable.
+                logger.warning(
+                    "[Library] Retaining cross-volume root as absolute path",
+                    path=canonical_root,
+                    error=error,
+                )
+                return canonical_root
+        return relative if relative.parts else Path(".")
+
     def __get_or_create_folder(self, session: Session, root: Path) -> Folder:
         """Return the persisted folder for ``root``, matching equivalent path spellings."""
         canonical_root = self.__canonical_root(root)
         for folder in session.scalars(select(Folder).order_by(Folder.id)):
-            if self.__canonical_root(folder.path) == canonical_root:
+            if self.__resolve_folder_path(folder.path) == canonical_root:
                 return folder
 
-        folder = Folder(path=canonical_root, uuid=str(uuid4()))
+        folder = Folder(path=self.__relative_folder_path(canonical_root), uuid=str(uuid4()))
         session.add(folder)
         session.flush()
         return folder
@@ -415,6 +453,7 @@ class Library:
             folder = self.__get_or_create_folder(session, Path(root))
             session.commit()
             session.expunge(folder)
+            folder.path = self.__canonical_root(root)
             return folder
 
     @property
@@ -426,6 +465,8 @@ class Library:
         with Session(self.engine, expire_on_commit=False) as session:
             folders = list(session.scalars(select(Folder).order_by(Folder.id)))
             session.expunge_all()
+            for folder in folders:
+                folder.path = self.__resolve_folder_path(folder.path)
             return folders
 
     @property
@@ -462,9 +503,10 @@ class Library:
     def __relative_path_for_folder(self, session: Session, folder_id: int, path: Path) -> Path:
         path = Path(path)
         if path.is_absolute():
-            root = session.scalar(select(Folder.path).where(Folder.id == folder_id))
-            if root is None:
+            stored_root = session.scalar(select(Folder.path).where(Folder.id == folder_id))
+            if stored_root is None:
                 raise ValueError(f"Root is not configured: {folder_id}")
+            root = self.__resolve_folder_path(stored_root)
             try:
                 path = self.__canonical_root(path).relative_to(self.__canonical_root(root))
             except ValueError as error:
@@ -711,7 +753,7 @@ class Library:
 
         canonical_root = self.__canonical_root(folder)
         for candidate in session.scalars(select(Folder)):
-            if self.__canonical_root(candidate.path) == canonical_root:
+            if self.__resolve_folder_path(candidate.path) == canonical_root:
                 return candidate.id
         raise ValueError(f"Root is not configured: {folder}")
 
@@ -723,20 +765,23 @@ class Library:
             folder = session.scalar(select(Folder).where(Folder.id == folder_id))
             if folder is not None:
                 session.expunge(folder)
+                folder.path = self.__resolve_folder_path(folder.path)
             return folder
 
     def resolve_entry_path(self, entry: Entry) -> Path:
         """Resolve an entry's relative path against the root that owns it."""
         try:
-            return entry.folder.path / entry.path
-        except (AttributeError, DetachedInstanceError):
+            return self.__resolve_folder_path(entry.folder.path) / entry.path
+        except (AttributeError, DetachedInstanceError, ValueError):
             if self.engine is None:
                 raise ValueError("Library is not open.") from None
             with Session(self.engine) as session:
-                root = session.scalar(select(Folder.path).where(Folder.id == entry.folder_id))
-                if root is None:
+                stored_root = session.scalar(
+                    select(Folder.path).where(Folder.id == entry.folder_id)
+                )
+                if stored_root is None:
                     raise ValueError(f"Entry has no configured root: {entry.id}") from None
-                return root / entry.path
+                return self.__resolve_folder_path(stored_root) / entry.path
 
     def get_entry_full_by_file_path(self, file_path: Path) -> Entry | None:
         """Load an entry by its absolute path across all configured roots."""
@@ -746,7 +791,7 @@ class Library:
         absolute_path = self.__canonical_root(file_path)
         with Session(self.engine) as session:
             for folder in session.scalars(select(Folder).order_by(Folder.id)):
-                root = self.__canonical_root(folder.path)
+                root = self.__resolve_folder_path(folder.path)
                 try:
                     relative_path = absolute_path.relative_to(root)
                 except ValueError:
@@ -789,6 +834,7 @@ class Library:
             connection_string=connection_string,
         )
         self.engine = create_engine(connection_string, poolclass=poolclass)
+        self.library_dir = Path(library_dir)
         with Session(self.engine, expire_on_commit=False) as session:
             # Don't check DB version when creating new library
             if not is_new:
@@ -902,10 +948,6 @@ class Library:
                     logger.debug("ValueType already exists", field=field)
                     session.rollback()
 
-            # The first folder is the metadata/primary root. Additional roots are added with
-            # ``add_root`` and share this library database.
-            self.folder = self.__get_or_create_folder(session, library_dir)
-
             # Generate default .ts_ignore file
             if is_new:
                 try:
@@ -924,7 +966,6 @@ class Library:
                 if loaded_db_version < DB_VERSION:
                     self.library_dir = library_dir
                     self.save_library_backup_to_disk()
-                    self.library_dir = None
 
                 self.__prepare_legacy_schema(session, loaded_db_version)
                 MigrationRunner(session, self.__migration_steps()).upgrade(
@@ -934,12 +975,19 @@ class Library:
                 # Convert file extension list to ts_ignore file, if a .ts_ignore file does not exist
                 self.migrate_sql_to_ts_ignore(library_dir)
 
+            # The first folder is the metadata/primary root. Additional roots are added with
+            # ``add_root`` and share this library database.
+            self.folder = self.__get_or_create_folder(session, library_dir)
+            session.commit()
+
             # Update DB_VERSION
             if loaded_db_version < DB_VERSION:
                 self.set_version(DB_VERSION_CURRENT_KEY, DB_VERSION)
 
         # everything is fine, set the library path
         self.library_dir = library_dir
+        if self.folder is not None:
+            self.folder.path = self.__resolve_folder_path(self.folder.path)
         return LibraryStatus(success=True, library_path=library_dir)
 
     def __migration_steps(self) -> tuple[Migration, ...]:
@@ -962,6 +1010,11 @@ class Library:
                 self.__apply_db104_migration,
             ),
             Migration(105, "add per-folder override rules", lambda _session: None),
+            Migration(
+                106,
+                "store configured roots relative to the library",
+                self.__apply_db106_migration,
+            ),
         )
 
     def __prepare_legacy_schema(self, session: Session, loaded_db_version: int) -> None:
@@ -1042,6 +1095,34 @@ class Library:
             session.execute(text("ALTER TABLE entries_new RENAME TO entries"))
         finally:
             session.execute(text("PRAGMA foreign_keys=ON"))
+
+    def __apply_db106_migration(self, session: Session) -> None:
+        """Convert legacy absolute folder roots to paths relative to the library."""
+        if self.library_dir is None:
+            raise RuntimeError("A library directory is required for root path migration")
+
+        folders = list(session.scalars(select(Folder).order_by(Folder.id)))
+        if not folders:
+            return
+
+        old_primary_root = self.__resolve_folder_path(folders[0].path)
+        for folder in folders:
+            stored_path = Path(folder.path)
+            if not stored_path.is_absolute():
+                continue
+
+            try:
+                relative_path = Path(relpath(stored_path, old_primary_root))
+            except ValueError:
+                # A root on another volume cannot be represented by a relative path. Preserve
+                # it so the library remains usable; newly added roots use the same fallback.
+                logger.warning(
+                    "[Library][Migration] Retaining cross-volume root as absolute path",
+                    path=stored_path,
+                )
+                continue
+
+            folder.path = relative_path if relative_path.parts else Path(".")
 
     def __apply_repairs_for_db6(self, session: Session):
         """Apply database repairs introduced in DB_VERSION 7."""
@@ -1457,6 +1538,17 @@ class Library:
         """Add multiple Entry records to the Library."""
         assert items
 
+        folder_paths_by_identity: dict[int, tuple[Folder, Path]] = {}
+        for item in items:
+            if item.folder is None:
+                continue
+            folder = item.folder
+            if id(folder) in folder_paths_by_identity:
+                continue
+            original_path = Path(folder.path)
+            folder.path = self.__relative_folder_path(self.__resolve_folder_path(original_path))
+            folder_paths_by_identity[id(folder)] = (folder, original_path)
+
         with Session(self.engine) as session:
             # add all items
 
@@ -1466,10 +1558,14 @@ class Library:
             except IntegrityError:
                 session.rollback()
                 logger.error("IntegrityError")
-                return []
+                new_ids = []
+            else:
+                new_ids = [item.id for item in items]
+            finally:
+                session.expunge_all()
 
-            new_ids = [item.id for item in items]
-            session.expunge_all()
+        for folder, original_path in folder_paths_by_identity.values():
+            folder.path = original_path
 
         return new_ids
 
