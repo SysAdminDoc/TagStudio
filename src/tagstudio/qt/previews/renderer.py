@@ -65,7 +65,6 @@ from tagstudio.core.constants import (
     FONT_SAMPLE_TEXT,
 )
 from tagstudio.core.exceptions import NoRendererError
-from tagstudio.core.library.ignore import Ignore
 from tagstudio.core.media_types import MediaCategories, MediaType
 from tagstudio.core.utils.encoding import detect_char_encoding
 from tagstudio.core.utils.types import unwrap
@@ -1679,11 +1678,7 @@ class ThumbRenderer(QObject):
 
             # Check if the file is supposed to be ignored and render an overlay if needed
             try:
-                if (
-                    image
-                    and Ignore.compiled_patterns
-                    and Ignore.compiled_patterns.match(self.driver.lib.relative_path(filepath))
-                ):
+                if image and self.driver.lib.is_path_ignored(filepath):
                     image = render_ignored((adj_size, adj_size), pixel_ratio, image)
             except TypeError:
                 pass

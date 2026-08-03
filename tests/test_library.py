@@ -110,6 +110,43 @@ def test_library_supports_duplicate_relative_paths_per_root(library: Library):
     assert library.resolve_entry_path(secondary_entry) == secondary.path / "same.txt"
 
 
+@pytest.mark.parametrize("library", [TemporaryDirectory()], indirect=True)
+def test_folder_overrides_inherit_and_replace_rules(library: Library):
+    root = unwrap(library.folder)
+    auto_tag = unwrap(library.add_tag(Tag(name="auto-tag")))
+
+    library.set_folder_override(
+        Path("photos"),
+        folder=root,
+        ignore_patterns=["*.tmp"],
+        field_defaults=[FieldID.AUTHOR],
+        auto_tag_ids=[auto_tag.id],
+    )
+    library.set_folder_override(
+        Path("photos/private"),
+        folder=root,
+        field_defaults=[],
+        auto_tag_ids=[],
+    )
+
+    public_config = library.folder_override_config(Path("photos/public/image.jpg"), folder=root)
+    assert public_config.ignore_patterns == ("*.tmp",)
+    assert public_config.field_defaults == (FieldID.AUTHOR.name,)
+    assert public_config.auto_tag_ids == (auto_tag.id,)
+
+    private_config = library.folder_override_config(Path("photos/private/image.jpg"), folder=root)
+    assert private_config.ignore_patterns == ("*.tmp",)
+    assert private_config.field_defaults == ()
+    assert private_config.auto_tag_ids == ()
+
+    assert [
+        field.type_key
+        for field in library.default_fields_for_path(Path("photos/public/image.jpg"), folder=root)
+    ] == [FieldID.AUTHOR.name]
+    assert library.get_scan_ignore_patterns(root.path)[-1] == "photos/*.tmp"
+    assert library.is_path_ignored(root.path / "photos" / "cache.tmp")
+
+
 def test_create_tag(library: Library, generate_tag: Callable[..., Tag]):
     # tag already exists
     assert library.add_tag(generate_tag("foo", id=1000)) is None

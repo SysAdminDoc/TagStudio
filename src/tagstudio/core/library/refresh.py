@@ -16,7 +16,7 @@ from wcmatch import pathlib
 
 from tagstudio.core.library.alchemy.library import Library
 from tagstudio.core.library.alchemy.models import Entry
-from tagstudio.core.library.ignore import PATH_GLOB_FLAGS, Ignore, ignore_to_glob
+from tagstudio.core.library.ignore import PATH_GLOB_FLAGS, ignore_to_glob
 from tagstudio.core.utils.silent_subprocess import silent_run  # pyright: ignore
 from tagstudio.core.utils.types import unwrap
 
@@ -48,12 +48,18 @@ class RefreshTracker:
                 Entry(
                     path=entry_path,
                     folder_id=folder_id,
-                    fields=[],
+                    fields=self.library.default_fields_for_path(entry_path, folder=folder_id),
                     date_added=dt.now(),
                 )
                 for folder_id, entry_path in pending_files[index:end]
             ]
-            self.library.add_entries(entries)
+            new_ids = self.library.add_entries(entries)
+            for entry_id, entry in zip(new_ids, entries, strict=False):
+                auto_tag_ids = self.library.auto_tag_ids_for_path(
+                    entry.path, folder=entry.folder_id
+                )
+                if auto_tag_ids:
+                    self.library.add_tags_to_entries(entry_id, auto_tag_ids)
             index = end
         self._pending_files = []
         self.files_not_in_library = []
@@ -89,7 +95,7 @@ class RefreshTracker:
         total_count = 0
         for root in roots:
             folder = self.library.add_root(root)
-            ignore_patterns = Ignore.get_patterns(root)
+            ignore_patterns = self.library.get_scan_ignore_patterns(root)
 
             if force_internal_tools:
                 scanner = self.__wc_add(root, ignore_to_glob(ignore_patterns), folder.id)

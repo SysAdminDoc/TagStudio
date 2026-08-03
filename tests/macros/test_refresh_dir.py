@@ -8,7 +8,9 @@ from tempfile import TemporaryDirectory
 import pytest
 
 from tagstudio.core.enums import LibraryPrefs
+from tagstudio.core.library.alchemy.fields import FieldID
 from tagstudio.core.library.alchemy.library import Library
+from tagstudio.core.library.alchemy.models import Tag
 from tagstudio.core.library.refresh import RefreshTracker
 from tagstudio.core.utils.types import unwrap
 
@@ -70,3 +72,32 @@ def test_refresh_multiple_roots_keeps_duplicate_relative_paths_separate(library:
     entries = [entry for entry in library.all_entries() if entry.path == Path("same.txt")]
     assert len(entries) == 2
     assert {entry.folder_id for entry in entries} == {folder.id for folder in library.folders}
+
+
+@pytest.mark.parametrize("library", [TemporaryDirectory()], indirect=True)
+def test_refresh_applies_folder_field_defaults_and_auto_tags(library: Library):
+    root = unwrap(library.folder)
+    library_path = unwrap(library.library_dir)
+    photos_path = library_path / "photos"
+    photos_path.mkdir()
+    image_path = photos_path / "image.jpg"
+    image_path.touch()
+
+    auto_tag = library.add_tag(Tag(name="photo-auto-tag"))
+    assert auto_tag is not None
+    library.set_folder_override(
+        Path("photos"),
+        folder=root,
+        field_defaults=[FieldID.AUTHOR],
+        auto_tag_ids=[auto_tag.id],
+    )
+
+    tracker = RefreshTracker(library=library)
+    library.included_files.clear()
+    list(tracker.refresh_dir(library_path, force_internal_tools=True))
+    list(tracker.save_new_files())
+
+    entry = library.get_entry_full_by_path(Path("photos/image.jpg"), folder=root)
+    assert entry is not None
+    assert [field.type_key for field in entry.fields] == [FieldID.AUTHOR.name]
+    assert auto_tag.id in {tag.id for tag in entry.tags}

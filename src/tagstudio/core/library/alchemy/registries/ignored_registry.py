@@ -5,13 +5,11 @@
 
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import structlog
 
 from tagstudio.core.library.alchemy.library import Library
 from tagstudio.core.library.alchemy.models import Entry
-from tagstudio.core.library.ignore import Ignore
 
 logger = structlog.get_logger(__name__)
 
@@ -36,16 +34,7 @@ class IgnoredRegistry:
 
         self.ignored_entries = []
         for i, entry in enumerate(self.lib.all_entries()):
-            root = self.lib.get_folder(entry.folder_id)
-            if root is None:
-                yield i
-                continue
-            library_dir: Path = root.path
-            Ignore.get_patterns(library_dir)
-            if not Ignore.compiled_patterns:
-                # If the compiled_patterns has malfunctioned, don't consider that a false positive
-                yield i
-            elif Ignore.compiled_patterns.match(library_dir / entry.path):
+            if self.lib.is_path_ignored(self.lib.resolve_entry_path(entry)):
                 self.ignored_entries.append(entry)
             yield i
 

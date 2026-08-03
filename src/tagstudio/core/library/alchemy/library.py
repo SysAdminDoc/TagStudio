@@ -22,6 +22,7 @@ from warnings import catch_warnings
 
 import sqlalchemy
 import structlog
+import wcmatch.fnmatch as fnmatch
 from humanfriendly import format_timespan  # pyright: ignore[reportUnknownVariableType]
 from sqlalchemy import (
     URL,
@@ -96,6 +97,7 @@ from tagstudio.core.library.alchemy.migrations import Migration, MigrationRunner
 from tagstudio.core.library.alchemy.models import (
     Entry,
     Folder,
+    FolderOverride,
     Namespace,
     Preferences,
     Tag,
@@ -105,6 +107,7 @@ from tagstudio.core.library.alchemy.models import (
     Version,
 )
 from tagstudio.core.library.alchemy.visitors import SQLBoolExpressionBuilder
+from tagstudio.core.library.ignore import PATH_GLOB_FLAGS, Ignore, ignore_to_glob
 from tagstudio.core.library.json.library import Library as JsonLibrary
 from tagstudio.core.utils.types import unwrap
 from tagstudio.qt.translations import Translations
@@ -213,6 +216,15 @@ class LibraryStatus:
     message: str | None = None
     msg_description: str | None = None
     json_migration_req: bool = False
+
+
+@dataclass(frozen=True)
+class FolderOverrideConfig:
+    """Effective rules for a path after applying matching parent overrides."""
+
+    ignore_patterns: tuple[str, ...] = ()
+    field_defaults: tuple[str, ...] | None = None
+    auto_tag_ids: tuple[int, ...] = ()
 
 
 class Library:
@@ -438,6 +450,250 @@ class Library:
         if root is None:
             return file_path
         return self.__canonical_root(file_path).relative_to(self.__canonical_root(root))
+
+    @staticmethod
+    def __normalize_override_path(path: Path) -> Path:
+        path = Path(path)
+        if path.is_absolute() or ".." in path.parts:
+            raise ValueError("Folder override paths must stay within their library root")
+        parts = tuple(part for part in path.parts if part not in ("", "."))
+        return Path(*parts) if parts else Path(".")
+
+    def __relative_path_for_folder(self, session: Session, folder_id: int, path: Path) -> Path:
+        path = Path(path)
+        if path.is_absolute():
+            root = session.scalar(select(Folder.path).where(Folder.id == folder_id))
+            if root is None:
+                raise ValueError(f"Root is not configured: {folder_id}")
+            try:
+                path = self.__canonical_root(path).relative_to(self.__canonical_root(root))
+            except ValueError as error:
+                raise ValueError(f"Path is outside root: {path}") from error
+        return path
+
+    def __matching_folder_overrides(
+        self, session: Session, folder_id: int, path: Path
+    ) -> list[FolderOverride]:
+        relative_path = self.__relative_path_for_folder(session, folder_id, path)
+        matches: list[FolderOverride] = []
+        for override in session.scalars(
+            select(FolderOverride)
+            .where(FolderOverride.folder_id == folder_id)
+            .order_by(FolderOverride.id)
+        ):
+            override_path = self.__normalize_override_path(override.path)
+            if override_path == Path("."):
+                matches.append(override)
+                continue
+            try:
+                relative_path.relative_to(override_path)
+            except ValueError:
+                continue
+            matches.append(override)
+
+        return sorted(
+            matches,
+            key=lambda override: (
+                len(self.__normalize_override_path(override.path).parts),
+                override.id,
+            ),
+        )
+
+    def folder_override_config(
+        self, path: Path, folder: Folder | Path | int | None = None
+    ) -> FolderOverrideConfig:
+        """Return the effective override values for a file or directory path."""
+        with Session(self.engine) as session:
+            folder_id = self.__folder_id(session, folder)
+            matches = self.__matching_folder_overrides(session, folder_id, path)
+
+            ignore_patterns: list[str] = []
+            field_defaults: tuple[str, ...] | None = None
+            auto_tag_ids: tuple[int, ...] = ()
+            for override in matches:
+                if override.ignore_patterns is not None:
+                    ignore_patterns.extend(override.ignore_patterns)
+                if override.field_defaults is not None:
+                    field_defaults = tuple(override.field_defaults)
+                if override.auto_tag_ids is not None:
+                    auto_tag_ids = tuple(override.auto_tag_ids)
+
+            return FolderOverrideConfig(
+                ignore_patterns=tuple(dict.fromkeys(ignore_patterns)),
+                field_defaults=field_defaults,
+                auto_tag_ids=auto_tag_ids,
+            )
+
+    def get_folder_overrides(
+        self, folder: Folder | Path | int | None = None
+    ) -> list[FolderOverride]:
+        """Return all overrides for a configured root."""
+        with Session(self.engine, expire_on_commit=False) as session:
+            folder_id = self.__folder_id(session, folder)
+            overrides = list(
+                session.scalars(
+                    select(FolderOverride)
+                    .where(FolderOverride.folder_id == folder_id)
+                    .order_by(FolderOverride.path)
+                )
+            )
+            session.expunge_all()
+            return overrides
+
+    def set_folder_override(
+        self,
+        path: Path,
+        *,
+        folder: Folder | Path | int | None = None,
+        ignore_patterns: Iterable[str] | None = None,
+        field_defaults: Iterable[str | FieldID] | None = None,
+        auto_tag_ids: Iterable[int] | None = None,
+    ) -> FolderOverride:
+        """Create or replace rules for a directory relative to one configured root.
+
+        ``None`` means inherit the parent value; an empty iterable explicitly clears local
+        rules.  Ignore patterns are additive across matching parent directories.
+        """
+        normalized_path = self.__normalize_override_path(path)
+        normalized_fields = (
+            None
+            if field_defaults is None
+            else [
+                field.name if isinstance(field, FieldID) else str(field) for field in field_defaults
+            ]
+        )
+        normalized_tags = None if auto_tag_ids is None else [int(tag_id) for tag_id in auto_tag_ids]
+        normalized_ignores = (
+            None
+            if ignore_patterns is None
+            else [pattern.strip() for pattern in ignore_patterns if pattern.strip()]
+        )
+
+        with Session(self.engine, expire_on_commit=False) as session:
+            folder_id = self.__folder_id(session, folder)
+            if normalized_fields is not None:
+                known_fields = set(session.scalars(select(ValueType.key)))
+                unknown_fields = set(normalized_fields).difference(known_fields)
+                if unknown_fields:
+                    raise ValueError(f"Unknown field defaults: {sorted(unknown_fields)}")
+
+            override = session.scalar(
+                select(FolderOverride).where(
+                    and_(
+                        FolderOverride.folder_id == folder_id,
+                        FolderOverride.path == normalized_path,
+                    )
+                )
+            )
+            if override is None:
+                override = FolderOverride(
+                    folder_id=folder_id,
+                    path=normalized_path,
+                    ignore_patterns=normalized_ignores,
+                    field_defaults=normalized_fields,
+                    auto_tag_ids=normalized_tags,
+                )
+                session.add(override)
+            else:
+                override.ignore_patterns = normalized_ignores
+                override.field_defaults = normalized_fields
+                override.auto_tag_ids = normalized_tags
+
+            session.commit()
+            session.expunge(override)
+            return override
+
+    def clear_folder_override(self, path: Path, folder: Folder | Path | int | None = None) -> bool:
+        """Remove the exact override for a directory, leaving parent rules intact."""
+        normalized_path = self.__normalize_override_path(path)
+        with Session(self.engine) as session:
+            folder_id = self.__folder_id(session, folder)
+            override = session.scalar(
+                select(FolderOverride).where(
+                    and_(
+                        FolderOverride.folder_id == folder_id,
+                        FolderOverride.path == normalized_path,
+                    )
+                )
+            )
+            if override is None:
+                return False
+            session.delete(override)
+            session.commit()
+            return True
+
+    def get_scan_ignore_patterns(self, root: Path) -> list[str]:
+        """Return root ignore rules plus path-prefixed folder override rules."""
+        patterns = list(Ignore.get_patterns(root))
+        with Session(self.engine) as session:
+            folder_id = self.__folder_id(session, root)
+            overrides = session.scalars(
+                select(FolderOverride)
+                .where(FolderOverride.folder_id == folder_id)
+                .order_by(FolderOverride.path)
+            )
+            for override in overrides:
+                if not override.ignore_patterns:
+                    continue
+                prefix = self.__normalize_override_path(override.path)
+                for pattern in override.ignore_patterns:
+                    if not pattern:
+                        continue
+                    negated = pattern.startswith("!")
+                    raw_pattern = pattern[1:] if negated else pattern
+                    pattern_path = Path(raw_pattern)
+                    if pattern_path.is_absolute() or ".." in pattern_path.parts:
+                        raise ValueError(
+                            "Folder override ignore patterns must stay within their directory"
+                        )
+                    full_pattern = pattern_path if prefix == Path(".") else prefix / pattern_path
+                    patterns.append(("!" if negated else "") + full_pattern.as_posix())
+        return patterns
+
+    def is_path_ignored(self, file_path: Path) -> bool:
+        """Evaluate ignore rules, including the effective folder override, for a file."""
+        root = self.root_for_path(file_path)
+        if root is None:
+            return False
+        matcher = fnmatch.compile(
+            ignore_to_glob(self.get_scan_ignore_patterns(root)), PATH_GLOB_FLAGS
+        )
+        return bool(matcher.match(root / self.relative_path(file_path)))
+
+    def default_fields_for_path(
+        self, path: Path, folder: Folder | Path | int | None = None
+    ) -> list[BaseField]:
+        """Return field defaults after applying the nearest matching folder override."""
+        with Session(self.engine) as session:
+            folder_id = self.__folder_id(session, folder)
+            config = self.folder_override_config(path, folder=folder_id)
+            if config.field_defaults is None:
+                value_types = list(
+                    session.scalars(
+                        select(ValueType)
+                        .where(ValueType.is_default.is_(True))
+                        .order_by(ValueType.position)
+                    )
+                )
+            else:
+                value_types_by_key = {
+                    value_type.key: value_type
+                    for value_type in session.scalars(
+                        select(ValueType).where(ValueType.key.in_(config.field_defaults))
+                    )
+                }
+                value_types = [
+                    value_types_by_key[key]
+                    for key in config.field_defaults
+                    if key in value_types_by_key
+                ]
+            return [value_type.as_field for value_type in value_types]
+
+    def auto_tag_ids_for_path(
+        self, path: Path, folder: Folder | Path | int | None = None
+    ) -> tuple[int, ...]:
+        """Return tag IDs configured for a new entry at ``path``."""
+        return self.folder_override_config(path, folder=folder).auto_tag_ids
 
     def __folder_id(
         self,
@@ -705,6 +961,7 @@ class Library:
                 "allow duplicate relative paths across roots",
                 self.__apply_db104_migration,
             ),
+            Migration(105, "add per-folder override rules", lambda _session: None),
         )
 
     def __prepare_legacy_schema(self, session: Session, loaded_db_version: int) -> None:

@@ -20,7 +20,6 @@ from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from tagstudio.core.enums import ShowFilepathOption, Theme
 from tagstudio.core.library.alchemy.library import Library
-from tagstudio.core.library.ignore import Ignore
 from tagstudio.core.media_types import MediaCategories
 from tagstudio.qt.models.palette import ColorType, UiColor, get_ui_color
 from tagstudio.qt.translations import Translations
@@ -216,9 +215,7 @@ class FileAttributes(QWidget):
                 red = get_ui_color(ColorType.PRIMARY, UiColor.RED)
                 orange = get_ui_color(ColorType.PRIMARY, UiColor.ORANGE)
 
-                if Ignore.compiled_patterns and Ignore.compiled_patterns.match(
-                    self.library.relative_path(filepath)
-                ):
+                if self.library.is_path_ignored(filepath):
                     stats_label_text = (
                         f"{stats_label_text}"
                         f"  •  <span style='color:{orange}'>"

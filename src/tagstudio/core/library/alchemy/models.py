@@ -192,6 +192,23 @@ class Folder(Base):
     uuid: Mapped[str] = mapped_column(unique=True)
 
 
+class FolderOverride(Base):
+    """Optional rules scoped to a directory relative to a configured library root."""
+
+    __tablename__ = "folder_overrides"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    folder_id: Mapped[int] = mapped_column(ForeignKey("folders.id"))
+    path: Mapped[Path] = mapped_column(PathType)
+    ignore_patterns: Mapped[list[str] | None] = mapped_column(JSON)
+    field_defaults: Mapped[list[str] | None] = mapped_column(JSON)
+    auto_tag_ids: Mapped[list[int] | None] = mapped_column(JSON)
+
+    __table_args__ = (
+        UniqueConstraint("folder_id", "path", name="uq_folder_overrides_folder_path"),
+    )
+
+
 class Entry(Base):
     __tablename__ = "entries"
 
