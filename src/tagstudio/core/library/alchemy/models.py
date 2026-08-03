@@ -342,3 +342,12 @@ class Version(Base):
 
     key: Mapped[str] = mapped_column(primary_key=True)
     value: Mapped[int] = mapped_column(nullable=False, default=0)
+
+
+class SchemaMigration(Base):
+    """Record the ordered migration revisions present in a library."""
+
+    __tablename__ = "schema_migrations"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(nullable=False)

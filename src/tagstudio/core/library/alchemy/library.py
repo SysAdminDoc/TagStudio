@@ -91,6 +91,7 @@ from tagstudio.core.library.alchemy.fields import (
     TextField,
 )
 from tagstudio.core.library.alchemy.joins import TagEntry, TagParent
+from tagstudio.core.library.alchemy.migrations import Migration, MigrationRunner
 from tagstudio.core.library.alchemy.models import (
     Entry,
     Folder,
@@ -528,34 +529,19 @@ class Library:
                     logger.error("[ERROR][Library] Could not generate '.ts_ignore' file!", error=e)
 
             # Apply any post-SQL migration patches.
-            if not is_new:
+            if is_new:
+                MigrationRunner(session, self.__migration_steps()).seed(DB_VERSION)
+            else:
                 # save backup if patches will be applied
                 if loaded_db_version < DB_VERSION:
                     self.library_dir = library_dir
                     self.save_library_backup_to_disk()
                     self.library_dir = None
 
-                # NOTE: Depending on the data, some data and schema changes need to be applied in
-                # different orders. This chain of methods can likely be cleaned up and/or moved.
-                if loaded_db_version < 8:
-                    self.__apply_db8_schema_changes(session)
-                if loaded_db_version < 9:
-                    self.__apply_db9_schema_changes(session)
-                if loaded_db_version < 103:
-                    self.__apply_db103_schema_changes(session)
-                if loaded_db_version == 6:
-                    self.__apply_repairs_for_db6(session)
-
-                if loaded_db_version >= 6 and loaded_db_version < 8:
-                    self.__apply_db8_default_data(session)
-                if loaded_db_version < 9:
-                    self.__apply_db9_filename_population(session)
-                if loaded_db_version < 100:
-                    self.__apply_db100_parent_repairs(session)
-                if loaded_db_version < 102:
-                    self.__apply_db102_repairs(session)
-                if loaded_db_version < 103:
-                    self.__apply_db103_default_data(session)
+                self.__prepare_legacy_schema(session, loaded_db_version)
+                MigrationRunner(session, self.__migration_steps()).upgrade(
+                    loaded_db_version, DB_VERSION
+                )
 
                 # Convert file extension list to ts_ignore file, if a .ts_ignore file does not exist
                 self.migrate_sql_to_ts_ignore(library_dir)
@@ -567,6 +553,43 @@ class Library:
         # everything is fine, set the library path
         self.library_dir = library_dir
         return LibraryStatus(success=True, library_path=library_dir)
+
+    def __migration_steps(self) -> tuple[Migration, ...]:
+        """Return the ordered migration chain for the current library format."""
+        return (
+            Migration(7, "repair DB_VERSION 6 data", self.__apply_repairs_for_db6),
+            Migration(8, "add DB_VERSION 8 schema and defaults", self.__apply_db8_migration),
+            Migration(9, "add DB_VERSION 9 filename data", self.__apply_db9_migration),
+            Migration(
+                100,
+                "repair DB_VERSION 100 parent relationships",
+                self.__apply_db100_parent_repairs,
+            ),
+            Migration(101, "create the schema version ledger", lambda _session: None),
+            Migration(102, "repair DB_VERSION 102 parent references", self.__apply_db102_repairs),
+            Migration(103, "add DB_VERSION 103 hidden tags", self.__apply_db103_migration),
+        )
+
+    def __prepare_legacy_schema(self, session: Session, loaded_db_version: int) -> None:
+        """Add columns needed by ORM-backed data repairs before they run."""
+        if loaded_db_version < 8:
+            self.__apply_db8_schema_changes(session)
+        if loaded_db_version < 9:
+            self.__apply_db9_schema_changes(session)
+        if loaded_db_version < 103:
+            self.__apply_db103_schema_changes(session)
+
+    def __apply_db8_migration(self, session: Session) -> None:
+        self.__apply_db8_schema_changes(session)
+        self.__apply_db8_default_data(session)
+
+    def __apply_db9_migration(self, session: Session) -> None:
+        self.__apply_db9_schema_changes(session)
+        self.__apply_db9_filename_population(session)
+
+    def __apply_db103_migration(self, session: Session) -> None:
+        self.__apply_db103_schema_changes(session)
+        self.__apply_db103_default_data(session)
 
     def __apply_repairs_for_db6(self, session: Session):
         """Apply database repairs introduced in DB_VERSION 7."""
