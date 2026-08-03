@@ -107,6 +107,15 @@ from tagstudio.core.library.alchemy.models import (
     ValueType,
     Version,
 )
+from tagstudio.core.library.alchemy.sidecars import (
+    SidecarDocument,
+    SidecarError,
+    SidecarFormat,
+    normalize_format,
+    read_sidecar,
+    sidecar_path,
+    write_sidecar,
+)
 from tagstudio.core.library.alchemy.visitors import SQLBoolExpressionBuilder
 from tagstudio.core.library.ignore import PATH_GLOB_FLAGS, Ignore, ignore_to_glob
 from tagstudio.core.library.json.library import Library as JsonLibrary
@@ -782,6 +791,109 @@ class Library:
                 if stored_root is None:
                     raise ValueError(f"Entry has no configured root: {entry.id}") from None
                 return self.__resolve_folder_path(stored_root) / entry.path
+
+    def sidecar_path(self, entry_id: int, format: SidecarFormat | str = SidecarFormat.JSON) -> Path:
+        """Return the conventional sidecar path for one library entry."""
+        entry = self.get_entry_full(entry_id, with_fields=False, with_tags=True)
+        if entry is None:
+            raise ValueError(f"Entry does not exist: {entry_id}")
+        return sidecar_path(self.resolve_entry_path(entry), format)
+
+    def export_sidecar(
+        self,
+        entry_id: int,
+        format: SidecarFormat | str = SidecarFormat.JSON,
+        *,
+        destination: Path | None = None,
+        overwrite: bool = True,
+    ) -> Path:
+        """Export an entry's tags to a JSON or XMP sidecar beside its file."""
+        normalized_format = normalize_format(format)
+        entry = self.get_entry_full(entry_id, with_fields=False, with_tags=True)
+        if entry is None:
+            raise ValueError(f"Entry does not exist: {entry_id}")
+
+        file_path = self.resolve_entry_path(entry)
+        target = Path(destination) if destination is not None else sidecar_path(file_path, format)
+        if target.exists() and not overwrite:
+            raise FileExistsError(target)
+
+        tags = tuple(
+            sorted((tag.name for tag in entry.tags), key=lambda name: (name.casefold(), name))
+        )
+        document = SidecarDocument(tags=tags, file=entry.path.as_posix())
+        target.parent.mkdir(parents=True, exist_ok=True)
+        write_sidecar(target, document, normalized_format)
+        return target
+
+    def import_sidecar(
+        self,
+        entry_id: int,
+        path: Path | None = None,
+        *,
+        format: SidecarFormat | str | None = None,
+        replace_tags: bool = False,
+    ) -> int:
+        """Import tags from a sidecar, creating missing TagStudio tags as needed."""
+        entry = self.get_entry_full(entry_id, with_fields=False, with_tags=True)
+        if entry is None:
+            raise ValueError(f"Entry does not exist: {entry_id}")
+
+        normalized_format: SidecarFormat
+        if path is None:
+            if format is None:
+                candidates = [
+                    (
+                        sidecar_path(self.resolve_entry_path(entry), SidecarFormat.JSON),
+                        SidecarFormat.JSON,
+                    ),
+                    (
+                        sidecar_path(self.resolve_entry_path(entry), SidecarFormat.XMP),
+                        SidecarFormat.XMP,
+                    ),
+                ]
+                path, normalized_format = next(
+                    (
+                        (candidate, candidate_format)
+                        for candidate, candidate_format in candidates
+                        if candidate.exists()
+                    ),
+                    (None, SidecarFormat.JSON),
+                )
+                if path is None:
+                    raise FileNotFoundError(candidates[0][0])
+            else:
+                normalized_format = normalize_format(format)
+                path = sidecar_path(self.resolve_entry_path(entry), normalized_format)
+        else:
+            path = Path(path)
+            if format is None:
+                if path.name.endswith(".tagstudio.json"):
+                    normalized_format = SidecarFormat.JSON
+                elif path.suffix.lower() == ".xmp":
+                    normalized_format = SidecarFormat.XMP
+                else:
+                    raise SidecarError(f"Could not infer sidecar format from: {path}")
+            else:
+                normalized_format = normalize_format(format)
+
+        document = read_sidecar(path, normalized_format)
+        if replace_tags:
+            current_tag_ids = [tag.id for tag in entry.tags]
+            if current_tag_ids:
+                self.remove_tags_from_entries(entry_id, current_tag_ids)
+
+        tag_ids: list[int] = []
+        for name in document.tags:
+            tag = self.get_tag_by_name(name)
+            if tag is None:
+                tag = self.add_tag(Tag(name=name))
+            if tag is not None:
+                tag_ids.append(tag.id)
+
+        if tag_ids:
+            self.add_tags_to_entries(entry_id, tag_ids)
+        return len(tag_ids)
 
     def get_entry_full_by_file_path(self, file_path: Path) -> Entry | None:
         """Load an entry by its absolute path across all configured roots."""
