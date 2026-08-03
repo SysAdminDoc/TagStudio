@@ -49,3 +49,24 @@ def test_refresh_multi_byte_filenames(library: Library):
     assert Path("em–dash.txt") in registry.files_not_in_library
     assert Path("apostrophe’.txt") in registry.files_not_in_library
     assert Path("umlaute äöü.txt") in registry.files_not_in_library
+
+
+@pytest.mark.parametrize("library", [TemporaryDirectory()], indirect=True)
+def test_refresh_multiple_roots_keeps_duplicate_relative_paths_separate(library: Library):
+    primary = unwrap(library.library_dir)
+    with TemporaryDirectory() as secondary_name:
+        secondary = Path(secondary_name)
+        library.add_root(secondary)
+        (primary / "same.txt").touch()
+        (secondary / "same.txt").touch()
+
+        tracker = RefreshTracker(library=library)
+        library.included_files.clear()
+        list(tracker.refresh_dirs((primary, secondary), force_internal_tools=True))
+        assert tracker.files_not_in_library == [Path("same.txt"), Path("same.txt")]
+
+        list(tracker.save_new_files())
+
+    entries = [entry for entry in library.all_entries() if entry.path == Path("same.txt")]
+    assert len(entries) == 2
+    assert {entry.folder_id for entry in entries} == {folder.id for folder in library.folders}

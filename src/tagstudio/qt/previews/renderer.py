@@ -1682,9 +1682,7 @@ class ThumbRenderer(QObject):
                 if (
                     image
                     and Ignore.compiled_patterns
-                    and Ignore.compiled_patterns.match(
-                        filepath.relative_to(unwrap(self.driver.lib.library_dir))
-                    )
+                    and Ignore.compiled_patterns.match(self.driver.lib.relative_path(filepath))
                 ):
                     image = render_ignored((adj_size, adj_size), pixel_ratio, image)
             except TypeError:

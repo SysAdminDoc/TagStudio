@@ -12,7 +12,6 @@ import structlog
 from tagstudio.core.library.alchemy.library import Library
 from tagstudio.core.library.alchemy.models import Entry
 from tagstudio.core.library.ignore import Ignore
-from tagstudio.core.utils.types import unwrap
 
 logger = structlog.get_logger(__name__)
 
@@ -36,9 +35,13 @@ class IgnoredRegistry:
         logger.info("[IgnoredRegistry] Refreshing ignored entries...")
 
         self.ignored_entries = []
-        library_dir: Path = unwrap(self.lib.library_dir)
-
         for i, entry in enumerate(self.lib.all_entries()):
+            root = self.lib.get_folder(entry.folder_id)
+            if root is None:
+                yield i
+                continue
+            library_dir: Path = root.path
+            Ignore.get_patterns(library_dir)
             if not Ignore.compiled_patterns:
                 # If the compiled_patterns has malfunctioned, don't consider that a false positive
                 yield i

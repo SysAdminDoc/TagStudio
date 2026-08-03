@@ -227,6 +227,7 @@
     "menu.file.save_backup": "&Save Library Backup",
     "menu.file.save_library": "Save Library",
     "menu.file": "&File",
+    "menu.file.add_library_root": "Add Library Root",
     "menu.help.about": "About",
     "menu.help": "&Help",
     "menu.macros.folders_to_tags": "Folders to Tags",

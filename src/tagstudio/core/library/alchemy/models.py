@@ -6,7 +6,7 @@ from datetime import datetime as dt
 from pathlib import Path
 from typing import override
 
-from sqlalchemy import JSON, ForeignKey, ForeignKeyConstraint, Integer, event
+from sqlalchemy import JSON, ForeignKey, ForeignKeyConstraint, Integer, UniqueConstraint, event
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing_extensions import deprecated
 
@@ -187,7 +187,6 @@ class Tag(Base):
 class Folder(Base):
     __tablename__ = "folders"
 
-    # TODO - implement this
     id: Mapped[int] = mapped_column(primary_key=True)
     path: Mapped[Path] = mapped_column(PathType, unique=True)
     uuid: Mapped[str] = mapped_column(unique=True)
@@ -199,9 +198,9 @@ class Entry(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
 
     folder_id: Mapped[int] = mapped_column(ForeignKey("folders.id"))
-    folder: Mapped[Folder] = relationship("Folder")
+    folder: Mapped[Folder] = relationship("Folder", lazy="joined")
 
-    path: Mapped[Path] = mapped_column(PathType, unique=True)
+    path: Mapped[Path] = mapped_column(PathType)
     filename: Mapped[str] = mapped_column()
     suffix: Mapped[str] = mapped_column()
     date_created: Mapped[dt | None]
@@ -209,6 +208,8 @@ class Entry(Base):
     date_added: Mapped[dt | None]
 
     tags: Mapped[set[Tag]] = relationship(secondary="tag_entries")
+
+    __table_args__ = (UniqueConstraint("folder_id", "path", name="uq_entries_folder_path"),)
 
     text_fields: Mapped[list[TextField]] = relationship(
         back_populates="entry",
@@ -238,16 +239,22 @@ class Entry(Base):
     def __init__(
         self,
         path: Path,
-        folder: Folder,
-        fields: list[BaseField],
+        folder: Folder | None = None,
+        fields: list[BaseField] | None = None,
         id: int | None = None,
         date_created: dt | None = None,
         date_modified: dt | None = None,
         date_added: dt | None = None,
+        folder_id: int | None = None,
     ) -> None:
         super().__init__()
         self.path = path
-        self.folder = folder
+        if folder is not None:
+            self.folder = folder
+        elif folder_id is not None:
+            self.folder_id = folder_id
+        else:
+            raise ValueError("An entry must specify a folder or folder ID")
         self.id = id  # pyright: ignore[reportAttributeAccessIssue]
         self.filename = path.name
         self.suffix = path.suffix.lstrip(".").lower()
@@ -260,7 +267,7 @@ class Entry(Base):
         # The date this entry was added to the library.
         self.date_added = date_added
 
-        for field in fields:
+        for field in fields or []:
             if isinstance(field, TextField):
                 self.text_fields.append(field)
             elif isinstance(field, DatetimeField):

@@ -22,7 +22,6 @@ from tagstudio.core.enums import ShowFilepathOption, Theme
 from tagstudio.core.library.alchemy.library import Library
 from tagstudio.core.library.ignore import Ignore
 from tagstudio.core.media_types import MediaCategories
-from tagstudio.core.utils.types import unwrap
 from tagstudio.qt.models.palette import ColorType, UiColor, get_ui_color
 from tagstudio.qt.translations import Translations
 from tagstudio.qt.utils.file_opener import FileOpenerHelper, FileOpenerLabel
@@ -161,7 +160,7 @@ class FileAttributes(QWidget):
             if self.driver.settings.show_filepath == ShowFilepathOption.SHOW_FULL_PATHS:
                 display_path = filepath
             elif self.driver.settings.show_filepath == ShowFilepathOption.SHOW_RELATIVE_PATHS:
-                display_path = Path(filepath).relative_to(unwrap(self.library.library_dir))
+                display_path = self.library.relative_path(Path(filepath))
             elif self.driver.settings.show_filepath == ShowFilepathOption.SHOW_FILENAMES_ONLY:
                 display_path = Path(filepath.name)
 
@@ -218,7 +217,7 @@ class FileAttributes(QWidget):
                 orange = get_ui_color(ColorType.PRIMARY, UiColor.ORANGE)
 
                 if Ignore.compiled_patterns and Ignore.compiled_patterns.match(
-                    filepath.relative_to(unwrap(self.library.library_dir))
+                    self.library.relative_path(filepath)
                 ):
                     stats_label_text = (
                         f"{stats_label_text}"

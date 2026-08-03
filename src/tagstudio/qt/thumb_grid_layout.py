@@ -11,7 +11,6 @@ from PySide6.QtWidgets import QLayout, QLayoutItem, QScrollArea
 from tagstudio.core.constants import TAG_ARCHIVED, TAG_FAVORITE
 from tagstudio.core.library.alchemy.enums import ItemType
 from tagstudio.core.library.alchemy.models import Entry
-from tagstudio.core.utils.types import unwrap
 from tagstudio.qt.mixed.item_thumb import BadgeType, ItemThumb
 from tagstudio.qt.previews.renderer import ThumbRenderer
 
@@ -102,7 +101,7 @@ class ThumbGridLayout(QLayout):
         ids = [id for id in ids if id not in self._entries]
         entries = self.driver.lib.get_entries(ids)
         for entry in entries:
-            self._entry_paths[unwrap(self.driver.lib.library_dir) / entry.path] = entry.id
+            self._entry_paths[self.driver.lib.resolve_entry_path(entry)] = entry.id
             self._entries[entry.id] = entry
 
         tag_ids = [TAG_ARCHIVED, TAG_FAVORITE]
@@ -277,7 +276,7 @@ class ThumbGridLayout(QLayout):
             item_x = width_offset * col
             item_y = height_offset * row
             item_thumb.setGeometry(QRect(QPoint(item_x, item_y), item.sizeHint()))
-            file_path = unwrap(self.driver.lib.library_dir) / entry.path
+            file_path = self.driver.lib.resolve_entry_path(entry)
             item_thumb.set_item(entry)
 
             if result := self._render_results.get(file_path):

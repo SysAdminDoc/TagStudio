@@ -18,7 +18,6 @@ from tagstudio.core.constants import TAG_ARCHIVED, TAG_FAVORITE
 from tagstudio.core.library.alchemy.enums import ItemType
 from tagstudio.core.library.alchemy.library import Library
 from tagstudio.core.media_types import MediaCategories, MediaType
-from tagstudio.core.utils.types import unwrap
 from tagstudio.qt.platform_strings import open_file_str, trash_term
 from tagstudio.qt.translations import Translations
 from tagstudio.qt.utils.file_opener import FileOpenerHelper
@@ -439,7 +438,7 @@ class ItemThumb(FlowWidget):
 
     def set_item(self, entry: "Entry"):
         self.set_item_id(entry.id)
-        path = unwrap(self.lib.library_dir) / entry.path
+        path = self.lib.resolve_entry_path(entry)
         self.set_item_path(path)
 
     def set_item_id(self, item_id: int):
@@ -518,7 +517,7 @@ class ItemThumb(FlowWidget):
             if not entry:
                 continue
 
-            url = QUrl.fromLocalFile(Path(unwrap(self.lib.library_dir)) / entry.path)
+            url = QUrl.fromLocalFile(self.lib.resolve_entry_path(entry))
             paths.append(url)
 
         mimedata.setUrls(paths)

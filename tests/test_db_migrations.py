@@ -57,7 +57,7 @@ def test_library_migrations(path: str):
             revisions = connection.execute(
                 "SELECT revision FROM schema_migrations ORDER BY revision"
             ).fetchall()
-        assert revisions == [(7,), (8,), (9,), (100,), (101,), (102,), (103,)]
+        assert revisions == [(7,), (8,), (9,), (100,), (101,), (102,), (103,), (104,)]
         shutil.rmtree(temp_path)
         assert status.success
     except Exception as e:

@@ -60,6 +60,7 @@ logger = structlog.get_logger(__name__)
 class MainMenuBar(QMenuBar):
     file_menu: QMenu
     open_library_action: QAction
+    add_library_root_action: QAction
     open_recent_library_menu: QMenu
     save_library_backup_action: QAction
     settings_action: QAction
@@ -118,6 +119,11 @@ class MainMenuBar(QMenuBar):
         )
         self.open_library_action.setToolTip("Ctrl+O")
         self.file_menu.addAction(self.open_library_action)
+
+        # Add another filesystem root to the currently open library.
+        self.add_library_root_action = QAction(Translations["menu.file.add_library_root"], self)
+        self.add_library_root_action.setEnabled(False)
+        self.file_menu.addAction(self.add_library_root_action)
 
         # Open Recent
         self.open_recent_library_menu = QMenu(Translations["menu.file.open_recent_library"], self)

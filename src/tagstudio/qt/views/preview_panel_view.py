@@ -156,7 +156,7 @@ class PreviewPanelView(QWidget):
                 entry_id = selected[0]
                 entry: Entry = unwrap(self.lib.get_entry(entry_id))
 
-                filepath: Path = unwrap(self.lib.library_dir) / entry.path
+                filepath: Path = self.lib.resolve_entry_path(entry)
 
                 if update_preview:
                     stats: FileAttributeData = self.__thumb.display_file(filepath)

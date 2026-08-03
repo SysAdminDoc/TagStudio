@@ -34,7 +34,7 @@ class UnlinkedRegistry:
 
         self.unlinked_entries = []
         for i, entry in enumerate(self.lib.all_entries()):
-            full_path = unwrap(self.lib.library_dir) / entry.path
+            full_path = self.lib.resolve_entry_path(entry)
             if not full_path.exists() or not full_path.is_file():
                 self.unlinked_entries.append(entry)
             yield i
@@ -44,12 +44,15 @@ class UnlinkedRegistry:
 
         Works if files were just moved to different subfolders and don't have duplicate names.
         """
-        library_dir = unwrap(self.lib.library_dir)
+        library_dir = self.lib.get_folder(match_entry.folder_id)
+        if library_dir is None:
+            return []
+        library_path = library_dir.path
         matches: list[Path] = []
 
         # NOTE: ignore_to_glob() is needed for wcmatch, not ripgrep.
-        ignore_patterns = ignore_to_glob(Ignore.get_patterns(library_dir))
-        for path in pathlib.Path(str(library_dir)).glob(
+        ignore_patterns = ignore_to_glob(Ignore.get_patterns(library_path))
+        for path in pathlib.Path(str(library_path)).glob(
             f"***/{match_entry.path.name}",
             flags=PATH_GLOB_FLAGS,
             exclude=ignore_patterns,
@@ -57,7 +60,7 @@ class UnlinkedRegistry:
             if path.is_dir():
                 continue
             if path.name == match_entry.path.name:
-                new_path = Path(path).relative_to(library_dir)
+                new_path = Path(path).relative_to(library_path)
                 matches.append(new_path)
 
         logger.info("[UnlinkedRegistry] Matches", matches=matches)
@@ -77,7 +80,9 @@ class UnlinkedRegistry:
                 )
                 if not self.lib.update_entry_path(entry.id, item_matches[0]):
                     try:
-                        match = unwrap(self.lib.get_entry_full_by_path(item_matches[0]))
+                        match = unwrap(
+                            self.lib.get_entry_full_by_path(item_matches[0], folder=entry.folder_id)
+                        )
                         entry_full = unwrap(self.lib.get_entry_full(entry.id))
                         self.lib.merge_entries(entry_full, match)
                     except AttributeError:

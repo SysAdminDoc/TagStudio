@@ -37,7 +37,7 @@ class CollageIconRenderer(QObject):
         keep_aspect: bool,
     ):
         entry = unwrap(self.lib.get_entry(entry_id))
-        filepath = unwrap(self.lib.library_dir) / entry.path
+        filepath = self.lib.resolve_entry_path(entry)
         color: str = ""
 
         try:

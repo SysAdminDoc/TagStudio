@@ -291,6 +291,23 @@ class QtDriver(DriverMixin, QObject):
         if dir not in (None, ""):
             self.open_library(Path(dir))
 
+    def add_library_root_from_dialog(self):
+        """Add a filesystem root and scan it into the open library."""
+        if self.lib.library_dir is None:
+            return
+
+        directory = QFileDialog.getExistingDirectory(
+            parent=None,
+            caption=Translations["menu.file.add_library_root"],
+            dir=str(self.lib.library_dir),
+            options=QFileDialog.Option.ShowDirsOnly,
+        )
+        if directory in (None, ""):
+            return
+
+        self.lib.add_root(Path(directory))
+        self.add_new_files_callback()
+
     def signal_handler(self, sig, frame):
         if sig in (SIGINT, SIGTERM, SIGQUIT):
             self.SIGTERM.emit()
@@ -394,6 +411,10 @@ class QtDriver(DriverMixin, QObject):
         # Open/Create Library
         self.main_window.menu_bar.open_library_action.triggered.connect(
             self.open_library_from_dialog
+        )
+
+        self.main_window.menu_bar.add_library_root_action.triggered.connect(
+            self.add_library_root_from_dialog
         )
 
         # Open Recent
@@ -793,6 +814,7 @@ class QtDriver(DriverMixin, QObject):
         try:
             self.main_window.menu_bar.save_library_backup_action.setEnabled(False)
             self.main_window.menu_bar.close_library_action.setEnabled(False)
+            self.main_window.menu_bar.add_library_root_action.setEnabled(False)
             self.main_window.menu_bar.refresh_dir_action.setEnabled(False)
             self.main_window.menu_bar.tag_manager_action.setEnabled(False)
             self.main_window.menu_bar.color_manager_action.setEnabled(False)
@@ -930,7 +952,7 @@ class QtDriver(DriverMixin, QObject):
         else:
             for item in selected:
                 entry = self.lib.get_entry(item)
-                filepath: Path = entry.path
+                filepath: Path = self.lib.resolve_entry_path(unwrap(entry))
                 pending.append((item, filepath))
 
         if pending:
@@ -952,7 +974,8 @@ class QtDriver(DriverMixin, QObject):
                     self.main_window.status_bar.repaint()
 
                     self.lib.remove_entries([e_id])
-                    if delete_file(library_dir / f):
+                    full_path = f if f.is_absolute() else library_dir / f
+                    if delete_file(full_path):
                         deleted_count += 1
 
         self.clear_select_action_callback()
@@ -1042,7 +1065,7 @@ class QtDriver(DriverMixin, QObject):
         pw.show()
 
         iterator = FunctionIterator(
-            lambda lib=unwrap(self.lib.library_dir): tracker.refresh_dir(lib)  # noqa: B008
+            lambda roots=self.lib.roots: tracker.refresh_dirs(roots)  # noqa: B008
         )
         iterator.value.connect(
             lambda x: (
@@ -1673,6 +1696,7 @@ class QtDriver(DriverMixin, QObject):
         self.set_select_actions_visibility()
         self.main_window.menu_bar.save_library_backup_action.setEnabled(True)
         self.main_window.menu_bar.close_library_action.setEnabled(True)
+        self.main_window.menu_bar.add_library_root_action.setEnabled(True)
         self.main_window.menu_bar.refresh_dir_action.setEnabled(True)
         self.main_window.menu_bar.tag_manager_action.setEnabled(True)
         self.main_window.menu_bar.color_manager_action.setEnabled(True)

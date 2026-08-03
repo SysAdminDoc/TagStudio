@@ -4,7 +4,8 @@
 
 
 import shutil
-from collections.abc import Iterator
+import tempfile
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime as dt
 from pathlib import Path
@@ -26,6 +27,7 @@ logger = structlog.get_logger(__name__)
 class RefreshTracker:
     library: Library
     files_not_in_library: list[Path] = field(default_factory=list)
+    _pending_files: list[tuple[int, Path]] = field(default_factory=list, init=False, repr=False)
 
     @property
     def files_count(self) -> int:
@@ -34,22 +36,26 @@ class RefreshTracker:
     def save_new_files(self) -> Iterator[int]:
         """Save the list of files that are not in the library."""
         batch_size = 200
+        pending_files = self._pending_files or [
+            (unwrap(self.library.folder).id, entry_path) for entry_path in self.files_not_in_library
+        ]
 
         index = 0
-        while index < len(self.files_not_in_library):
+        while index < len(pending_files):
             yield index
-            end = min(len(self.files_not_in_library), index + batch_size)
+            end = min(len(pending_files), index + batch_size)
             entries = [
                 Entry(
                     path=entry_path,
-                    folder=unwrap(self.library.folder),
+                    folder_id=folder_id,
                     fields=[],
                     date_added=dt.now(),
                 )
-                for entry_path in self.files_not_in_library[index:end]
+                for folder_id, entry_path in pending_files[index:end]
             ]
             self.library.add_entries(entries)
             index = end
+        self._pending_files = []
         self.files_not_in_library = []
 
     def refresh_dir(self, library_dir: Path, force_internal_tools: bool = False) -> Iterator[int]:
@@ -60,21 +66,46 @@ class RefreshTracker:
             force_internal_tools (bool): Option to force the use of internal tools for scanning
                 (i.e. wcmatch) instead of using tools found on the system (i.e. ripgrep).
         """
+        return self.refresh_dirs((library_dir,), force_internal_tools=force_internal_tools)
+
+    def refresh_dirs(
+        self,
+        library_dirs: Iterable[Path],
+        force_internal_tools: bool = False,
+    ) -> Iterator[int]:
+        """Scan all configured roots and retain each new file's owning folder."""
         if self.library.library_dir is None:
             raise ValueError("No library directory set.")
 
-        ignore_patterns = Ignore.get_patterns(library_dir)
+        roots = tuple(Path(root) for root in library_dirs)
+        if not roots:
+            raise ValueError("At least one library directory is required.")
 
-        if force_internal_tools:
-            return self.__wc_add(library_dir, ignore_to_glob(ignore_patterns))
+        self.files_not_in_library = []
+        self._pending_files = []
+        return self.__refresh_roots(roots, force_internal_tools)
 
-        dir_list: list[str] | None = self.__get_dir_list(library_dir, ignore_patterns)
+    def __refresh_roots(self, roots: tuple[Path, ...], force_internal_tools: bool) -> Iterator[int]:
+        total_count = 0
+        for root in roots:
+            folder = self.library.add_root(root)
+            ignore_patterns = Ignore.get_patterns(root)
 
-        # Use ripgrep if it was found and working, else fallback to wcmatch.
-        if dir_list is not None:
-            return self.__rg_add(library_dir, dir_list)
-        else:
-            return self.__wc_add(library_dir, ignore_to_glob(ignore_patterns))
+            if force_internal_tools:
+                scanner = self.__wc_add(root, ignore_to_glob(ignore_patterns), folder.id)
+            else:
+                dir_list = self.__get_dir_list(root, ignore_patterns)
+                # Use ripgrep if it was found and working, else fallback to wcmatch.
+                if dir_list is not None:
+                    scanner = self.__rg_add(root, dir_list, folder.id)
+                else:
+                    scanner = self.__wc_add(root, ignore_to_glob(ignore_patterns), folder.id)
+
+            root_count = 0
+            for count in scanner:
+                root_count = count
+                yield total_count + count
+            total_count += root_count
 
     def __get_dir_list(self, library_dir: Path, ignore_patterns: list[str]) -> list[str] | None:
         """Use ripgrep to return a list of matched directories and files.
@@ -86,29 +117,37 @@ class RefreshTracker:
         if rg_path is not None:
             logger.info("[Refresh: Using ripgrep for scanning]")
 
-            compiled_ignore_path = library_dir / ".TagStudio" / ".compiled_ignore"
-
-            # Write compiled ignore patterns (built-in + user) to a temp file to pass to ripgrep
-            with open(compiled_ignore_path, "w") as pattern_file:
+            # Secondary roots do not have their own .TagStudio directory, so keep the compiled
+            # ignore file in the OS temp directory and remove it after ripgrep exits.
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                prefix="tagstudio-ignore-",
+                suffix=".txt",
+                delete=False,
+            ) as pattern_file:
                 pattern_file.write("\n".join(ignore_patterns))
+                compiled_ignore_path = Path(pattern_file.name)
 
-            result = silent_run(
-                " ".join(
-                    [
-                        "rg",
-                        "--files",
-                        "--follow",
-                        "--hidden",
-                        "--ignore-file",
-                        f'"{str(compiled_ignore_path)}"',
-                    ]
-                ),
-                cwd=library_dir,
-                capture_output=True,
-                shell=True,
-                encoding="UTF-8",
-            )
-            compiled_ignore_path.unlink()
+            try:
+                result = silent_run(
+                    " ".join(
+                        [
+                            "rg",
+                            "--files",
+                            "--follow",
+                            "--hidden",
+                            "--ignore-file",
+                            f'"{str(compiled_ignore_path)}"',
+                        ]
+                    ),
+                    cwd=library_dir,
+                    capture_output=True,
+                    shell=True,
+                    encoding="UTF-8",
+                )
+            finally:
+                compiled_ignore_path.unlink(missing_ok=True)
 
             if result.stderr:
                 logger.error(result.stderr)
@@ -118,14 +157,13 @@ class RefreshTracker:
         logger.warning("[Refresh: ripgrep not found on system]")
         return None
 
-    def __rg_add(self, library_dir: Path, dir_list: list[str]) -> Iterator[int]:
+    def __rg_add(self, library_dir: Path, dir_list: list[str], folder_id: int) -> Iterator[int]:
         start_time_total = time()
         start_time_loop = time()
         dir_file_count = 0
-        self.files_not_in_library = []
-
         for r in dir_list:
-            f = pathlib.Path(r)
+            relative_path = pathlib.Path(r)
+            absolute_path = (library_dir / relative_path).resolve(strict=False)
 
             end_time_loop = time()
             # Yield output every 1/30 of a second
@@ -134,19 +172,20 @@ class RefreshTracker:
                 start_time_loop = time()
 
             # Skip if the file/path is already mapped in the Library
-            if f in self.library.included_files:
+            if absolute_path in self.library.included_files:
                 dir_file_count += 1
                 continue
 
             # Ignore if the file is a directory
-            if f.is_dir():
+            if absolute_path.is_dir():
                 continue
 
             dir_file_count += 1
-            self.library.included_files.add(f)
+            self.library.included_files.add(absolute_path)
 
-            if not self.library.has_path_entry(f):
-                self.files_not_in_library.append(f)
+            if not self.library.has_path_entry(relative_path, folder=folder_id):
+                self.files_not_in_library.append(relative_path)
+                self._pending_files.append((folder_id, relative_path))
 
         end_time_total = time()
         yield dir_file_count
@@ -158,18 +197,20 @@ class RefreshTracker:
             tool_used="ripgrep (system)",
         )
 
-    def __wc_add(self, library_dir: Path, ignore_patterns: list[str]) -> Iterator[int]:
+    def __wc_add(
+        self, library_dir: Path, ignore_patterns: list[str], folder_id: int
+    ) -> Iterator[int]:
         start_time_total = time()
         start_time_loop = time()
         dir_file_count = 0
-        self.files_not_in_library = []
-
         logger.info("[Refresh]: Falling back to wcmatch for scanning")
 
         try:
-            for f in pathlib.Path(str(library_dir)).glob(
+            root_path = Path(library_dir).resolve(strict=False)
+            for f in pathlib.Path(str(root_path)).glob(
                 "***/*", flags=PATH_GLOB_FLAGS, exclude=ignore_patterns
             ):
+                absolute_path = Path(f).resolve(strict=False)
                 end_time_loop = time()
                 # Yield output every 1/30 of a second
                 if (end_time_loop - start_time_loop) > 0.034:
@@ -177,21 +218,22 @@ class RefreshTracker:
                     start_time_loop = time()
 
                 # Skip if the file/path is already mapped in the Library
-                if f in self.library.included_files:
+                if absolute_path in self.library.included_files:
                     dir_file_count += 1
                     continue
 
                 # Ignore if the file is a directory
-                if f.is_dir():
+                if absolute_path.is_dir():
                     continue
 
                 dir_file_count += 1
-                self.library.included_files.add(f)
+                self.library.included_files.add(absolute_path)
 
-                relative_path = f.relative_to(library_dir)
+                relative_path = absolute_path.relative_to(root_path)
 
-                if not self.library.has_path_entry(relative_path):
+                if not self.library.has_path_entry(relative_path, folder=folder_id):
                     self.files_not_in_library.append(relative_path)
+                    self._pending_files.append((folder_id, relative_path))
         except ValueError:
             logger.info("[Refresh]: ValueError when refreshing directory with wcmatch!")
 

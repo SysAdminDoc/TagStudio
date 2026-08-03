@@ -52,6 +52,7 @@ from sqlalchemy.orm import (
     noload,
     selectinload,
 )
+from sqlalchemy.orm.exc import DetachedInstanceError
 from typing_extensions import deprecated
 
 from tagstudio.core.constants import (
@@ -228,6 +229,7 @@ class Library:
         self.dupe_files_count: int = -1
         self.ignored_entries_count: int = -1
         self.unlinked_entries_count: int = -1
+        self.included_files = set()
 
     def close(self):
         if self.engine:
@@ -246,7 +248,7 @@ class Library:
         """Migrate JSON library data to the SQLite database."""
         logger.info("Starting Library Conversion...")
         start_time = time.time()
-        folder: Folder = Folder(path=self.library_dir, uuid=str(uuid4()))
+        folder = unwrap(self.folder)
 
         # Tags
         for tag in json_lib.tags:
@@ -372,6 +374,144 @@ class Library:
 
         return self.open_sqlite_library(library_dir, is_new)
 
+    @staticmethod
+    def __canonical_root(root: Path) -> Path:
+        return Path(root).expanduser().resolve(strict=False)
+
+    def __get_or_create_folder(self, session: Session, root: Path) -> Folder:
+        """Return the persisted folder for ``root``, matching equivalent path spellings."""
+        canonical_root = self.__canonical_root(root)
+        for folder in session.scalars(select(Folder).order_by(Folder.id)):
+            if self.__canonical_root(folder.path) == canonical_root:
+                return folder
+
+        folder = Folder(path=canonical_root, uuid=str(uuid4()))
+        session.add(folder)
+        session.flush()
+        return folder
+
+    def add_root(self, root: Path) -> Folder:
+        """Add a scan root to this library and return its persisted folder record.
+
+        Roots may be offline when a portable or external-drive library is opened; they are
+        normalized before being stored so relative paths remain stable across sessions.
+        """
+        if self.engine is None:
+            raise ValueError("Library is not open.")
+
+        with Session(self.engine, expire_on_commit=False) as session:
+            folder = self.__get_or_create_folder(session, Path(root))
+            session.commit()
+            session.expunge(folder)
+            return folder
+
+    @property
+    def folders(self) -> list[Folder]:
+        """Return all configured roots in stable insertion order."""
+        if self.engine is None:
+            return []
+
+        with Session(self.engine, expire_on_commit=False) as session:
+            folders = list(session.scalars(select(Folder).order_by(Folder.id)))
+            session.expunge_all()
+            return folders
+
+    @property
+    def roots(self) -> tuple[Path, ...]:
+        """Return all configured root paths, including the primary library directory."""
+        return tuple(folder.path for folder in self.folders)
+
+    def root_for_path(self, file_path: Path) -> Path | None:
+        """Return the configured root containing an absolute file path, if any."""
+        absolute_path = self.__canonical_root(file_path)
+        for root in self.roots:
+            try:
+                absolute_path.relative_to(self.__canonical_root(root))
+                return root
+            except ValueError:
+                continue
+        return None
+
+    def relative_path(self, file_path: Path) -> Path:
+        """Return a file path relative to its configured root when possible."""
+        root = self.root_for_path(file_path)
+        if root is None:
+            return file_path
+        return self.__canonical_root(file_path).relative_to(self.__canonical_root(root))
+
+    def __folder_id(
+        self,
+        session: Session,
+        folder: Folder | Path | int | None,
+    ) -> int:
+        if folder is None:
+            if self.folder is None or self.folder.id is None:
+                raise ValueError("No primary library root is configured.")
+            return self.folder.id
+        if isinstance(folder, int):
+            return folder
+        if isinstance(folder, Folder):
+            return folder.id
+
+        canonical_root = self.__canonical_root(folder)
+        for candidate in session.scalars(select(Folder)):
+            if self.__canonical_root(candidate.path) == canonical_root:
+                return candidate.id
+        raise ValueError(f"Root is not configured: {folder}")
+
+    def get_folder(self, folder_id: int) -> Folder | None:
+        """Load a configured root by ID without leaving a live SQLAlchemy session attached."""
+        if self.engine is None:
+            return None
+        with Session(self.engine, expire_on_commit=False) as session:
+            folder = session.scalar(select(Folder).where(Folder.id == folder_id))
+            if folder is not None:
+                session.expunge(folder)
+            return folder
+
+    def resolve_entry_path(self, entry: Entry) -> Path:
+        """Resolve an entry's relative path against the root that owns it."""
+        try:
+            return entry.folder.path / entry.path
+        except (AttributeError, DetachedInstanceError):
+            if self.engine is None:
+                raise ValueError("Library is not open.") from None
+            with Session(self.engine) as session:
+                root = session.scalar(select(Folder.path).where(Folder.id == entry.folder_id))
+                if root is None:
+                    raise ValueError(f"Entry has no configured root: {entry.id}") from None
+                return root / entry.path
+
+    def get_entry_full_by_file_path(self, file_path: Path) -> Entry | None:
+        """Load an entry by its absolute path across all configured roots."""
+        if self.engine is None:
+            return None
+
+        absolute_path = self.__canonical_root(file_path)
+        with Session(self.engine) as session:
+            for folder in session.scalars(select(Folder).order_by(Folder.id)):
+                root = self.__canonical_root(folder.path)
+                try:
+                    relative_path = absolute_path.relative_to(root)
+                except ValueError:
+                    continue
+
+                entry = session.scalar(
+                    select(Entry)
+                    .where(
+                        and_(
+                            Entry.folder_id == folder.id,
+                            Entry.path == relative_path,
+                        )
+                    )
+                    .options(joinedload(Entry.folder))
+                )
+                if entry is not None:
+                    session.expunge(entry)
+                    make_transient(entry)
+                    return entry
+        return None
+
     def open_sqlite_library(self, library_dir: Path, is_new: bool) -> LibraryStatus:
         connection_string = URL.create(
             drivername="sqlite",
@@ -393,7 +533,7 @@ class Library:
             connection_string=connection_string,
         )
         self.engine = create_engine(connection_string, poolclass=poolclass)
-        with Session(self.engine) as session:
+        with Session(self.engine, expire_on_commit=False) as session:
             # Don't check DB version when creating new library
             if not is_new:
                 loaded_db_version = self.get_version(DB_VERSION_CURRENT_KEY)
@@ -506,17 +646,9 @@ class Library:
                     logger.debug("ValueType already exists", field=field)
                     session.rollback()
 
-            # check if folder matching current path exists already
-            self.folder = session.scalar(select(Folder).where(Folder.path == library_dir))
-            if not self.folder:
-                folder = Folder(
-                    path=library_dir,
-                    uuid=str(uuid4()),
-                )
-                session.add(folder)
-                session.expunge(folder)
-                session.commit()
-                self.folder = folder
+            # The first folder is the metadata/primary root. Additional roots are added with
+            # ``add_root`` and share this library database.
+            self.folder = self.__get_or_create_folder(session, library_dir)
 
             # Generate default .ts_ignore file
             if is_new:
@@ -568,6 +700,11 @@ class Library:
             Migration(101, "create the schema version ledger", lambda _session: None),
             Migration(102, "repair DB_VERSION 102 parent references", self.__apply_db102_repairs),
             Migration(103, "add DB_VERSION 103 hidden tags", self.__apply_db103_migration),
+            Migration(
+                104,
+                "allow duplicate relative paths across roots",
+                self.__apply_db104_migration,
+            ),
         )
 
     def __prepare_legacy_schema(self, session: Session, loaded_db_version: int) -> None:
@@ -590,6 +727,64 @@ class Library:
     def __apply_db103_migration(self, session: Session) -> None:
         self.__apply_db103_schema_changes(session)
         self.__apply_db103_default_data(session)
+
+    def __apply_db104_migration(self, session: Session) -> None:
+        """Replace the legacy global entry-path constraint with a per-root constraint."""
+        indexes = session.execute(text("PRAGMA index_list('entries')")).all()
+        unique_columns: list[list[str]] = []
+        for index in indexes:
+            if not index[2]:
+                continue
+            index_name = str(index[1]).replace("'", "''")
+            columns = session.execute(text(f"PRAGMA index_info('{index_name}')")).all()
+            unique_columns.append([str(column[2]) for column in columns])
+
+        if ["folder_id", "path"] in unique_columns:
+            return
+
+        if ["path"] not in unique_columns:
+            raise RuntimeError("entries table has no supported path uniqueness constraint")
+
+        session.execute(text("PRAGMA foreign_keys=OFF"))
+        try:
+            session.execute(
+                text(
+                    """
+                    CREATE TABLE entries_new (
+                        id INTEGER NOT NULL,
+                        folder_id INTEGER NOT NULL,
+                        path VARCHAR NOT NULL,
+                        filename VARCHAR NOT NULL,
+                        suffix VARCHAR NOT NULL,
+                        date_created DATETIME,
+                        date_modified DATETIME,
+                        date_added DATETIME,
+                        PRIMARY KEY (id),
+                        FOREIGN KEY(folder_id) REFERENCES folders (id),
+                        CONSTRAINT uq_entries_folder_path UNIQUE (folder_id, path)
+                    )
+                    """
+                )
+            )
+            session.execute(
+                text(
+                    """
+                    INSERT INTO entries_new
+                        (
+                            id, folder_id, path, filename, suffix, date_created,
+                            date_modified, date_added
+                        )
+                    SELECT
+                        id, folder_id, path, filename, suffix, date_created,
+                        date_modified, date_added
+                    FROM entries
+                    """
+                )
+            )
+            session.execute(text("DROP TABLE entries"))
+            session.execute(text("ALTER TABLE entries_new RENAME TO entries"))
+        finally:
+            session.execute(text("PRAGMA foreign_keys=ON"))
 
     def __apply_repairs_for_db6(self, session: Session):
         """Apply database repairs introduced in DB_VERSION 7."""
@@ -891,10 +1086,17 @@ class Library:
                 yield entry
                 session.expunge(entry)
 
-    def get_entry_full_by_path(self, path: Path) -> Entry | None:
-        """Get the entry with the corresponding path."""
+    def get_entry_full_by_path(
+        self, path: Path, folder: Folder | Path | int | None = None
+    ) -> Entry | None:
+        """Get the entry with the corresponding path in a configured root.
+
+        When no root is supplied, the primary library root is used for compatibility with the
+        original single-root API.
+        """
         with Session(self.engine) as session:
-            stmt = select(Entry).where(Entry.path == path)
+            folder_id = self.__folder_id(session, folder)
+            stmt = select(Entry).where(and_(Entry.folder_id == folder_id, Entry.path == path))
             stmt = (
                 stmt.outerjoin(Entry.text_fields)
                 .outerjoin(Entry.datetime_fields)
@@ -1024,10 +1226,13 @@ class Library:
                 session.query(Entry).where(Entry.id.in_(sub_list)).delete()
             session.commit()
 
-    def has_path_entry(self, path: Path) -> bool:
-        """Check if item with given path is in library already."""
+    def has_path_entry(self, path: Path, folder: Folder | Path | int | None = None) -> bool:
+        """Check if an item with the given path exists in a configured root."""
         with Session(self.engine) as session:
-            return session.query(exists().where(Entry.path == path)).scalar()
+            folder_id = self.__folder_id(session, folder)
+            return session.query(
+                exists().where(and_(Entry.folder_id == folder_id, Entry.path == path))
+            ).scalar()
 
     def get_paths(self, limit: int = -1) -> list[str]:
         path_strings: list[str] = []
@@ -1168,22 +1373,50 @@ class Library:
 
             return res
 
-    def update_entry_path(self, entry_id: int | Entry, path: Path) -> bool:
+    def update_entry_path(
+        self,
+        entry_id: int | Entry,
+        path: Path,
+        folder: Folder | Path | int | None = None,
+    ) -> bool:
         """Set the path field of an entry.
 
         Returns True if the action succeeded and False if the path already exists.
         """
-        if self.has_path_entry(path):
-            return False
+        entry_folder_id: int | None = None
         if isinstance(entry_id, Entry):
+            entry_folder_id = entry_id.folder_id
             entry_id = entry_id.id
 
         with Session(self.engine) as session:
+            if folder is not None:
+                entry_folder_id = self.__folder_id(session, folder)
+            elif entry_folder_id is None:
+                entry_folder_id = session.scalar(
+                    select(Entry.folder_id).where(Entry.id == entry_id)
+                )
+            if entry_folder_id is None:
+                return False
+
+            if session.scalar(
+                select(
+                    exists().where(
+                        and_(
+                            Entry.folder_id == entry_folder_id,
+                            Entry.path == path,
+                            Entry.id != entry_id,
+                        )
+                    )
+                )
+            ):
+                return False
+
             update_stmt = (
                 update(Entry)
                 .where(
                     and_(
                         Entry.id == entry_id,
+                        Entry.folder_id == entry_folder_id,
                     )
                 )
                 .values(path=path)

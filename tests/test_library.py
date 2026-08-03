@@ -90,6 +90,26 @@ def test_library_add_file(library: Library):
     assert library.has_path_entry(entry.path)
 
 
+def test_library_supports_duplicate_relative_paths_per_root(library: Library):
+    primary = unwrap(library.folder)
+    secondary = library.add_root(Path("secondary-root"))
+
+    entries = [
+        Entry(path=Path("same.txt"), folder=primary, fields=[]),
+        Entry(path=Path("same.txt"), folder=secondary, fields=[]),
+    ]
+    assert library.add_entries(entries)
+
+    assert library.has_path_entry(Path("same.txt"), folder=primary)
+    assert library.has_path_entry(Path("same.txt"), folder=secondary)
+    assert library.get_entry_full_by_path(Path("same.txt"), folder=secondary)
+
+    secondary_entry = next(
+        entry for entry in library.all_entries() if entry.folder_id == secondary.id
+    )
+    assert library.resolve_entry_path(secondary_entry) == secondary.path / "same.txt"
+
+
 def test_create_tag(library: Library, generate_tag: Callable[..., Tag]):
     # tag already exists
     assert library.add_tag(generate_tag("foo", id=1000)) is None
