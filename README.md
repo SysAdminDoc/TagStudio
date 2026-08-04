@@ -5,6 +5,7 @@
 [![PyTest](https://github.com/TagStudioDev/TagStudio/actions/workflows/pytest.yaml/badge.svg)](https://github.com/TagStudioDev/TagStudio/actions/workflows/pytest.yaml)
 [![MyPy](https://github.com/TagStudioDev/TagStudio/actions/workflows/mypy.yaml/badge.svg)](https://github.com/TagStudioDev/TagStudio/actions/workflows/mypy.yaml)
 [![Ruff](https://github.com/TagStudioDev/TagStudio/actions/workflows/ruff.yaml/badge.svg)](https://github.com/TagStudioDev/TagStudio/actions/workflows/ruff.yaml)
+[![Version](https://img.shields.io/badge/version-9.5.7-blue.svg)](https://github.com/TagStudioDev/TagStudio/releases)
 
 <p align="center">
   <img width="60%" src="docs/assets/ts-9-3_logo_text.png">
@@ -16,7 +17,7 @@ TagStudio is a photo & file organization application with an underlying tag-base
   <img width="80%" src="docs/assets/screenshot.png" alt="TagStudio Screenshot">
 </p>
 <p align="center">
-  <i>TagStudio Alpha v9.5.5 running on macOS Sequoia.</i>
+  <i>TagStudio Alpha v9.5.7 running on macOS Sequoia.</i>
 </p>
 
 ## Contents
@@ -218,7 +219,7 @@ See the [**Roadmap**](docs/roadmap.md) on the documentation site for a complete 
 
 ### What state is the project currently in?
 
-As of writing (Alpha v9.5.5) the project is very usable, however there's still some quirks and missing QoL features. Several additional features and changes are still planned (see: [roadmap](https://docs.tagstud.io/roadmap)) that add even more power and flexibility to the tagging and field systems while making it easier to tag in bulk and perform automated operations. Bugfixes and polishes are constantly trickling in along with the larger feature releases.
+As of writing (Alpha v9.5.7) the project is very usable, however there's still some quirks and missing QoL features. Several additional features and changes are still planned (see: [roadmap](https://docs.tagstud.io/roadmap)) that add even more power and flexibility to the tagging and field systems while making it easier to tag in bulk and perform automated operations. Bugfixes and polishes are constantly trickling in along with the larger feature releases.
 
 ### What features are you planning on adding?
 
