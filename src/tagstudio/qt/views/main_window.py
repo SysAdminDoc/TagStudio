@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLayout,
     QLineEdit,
+    QListWidget,
     QMainWindow,
     QMenu,
     QMenuBar,
@@ -480,6 +481,9 @@ class MainWindow(QMainWindow):
         # initialized in setup_content
         self.content_layout: QHBoxLayout
         self.content_splitter: QSplitter
+        self.saved_searches_panel: QWidget
+        self.saved_searches_list: QListWidget
+        self.save_saved_search_button: QPushButton
 
         # initialized in setup_entry_list
         self.entry_list_container: QWidget
@@ -689,13 +693,43 @@ class MainWindow(QMainWindow):
         self.content_splitter.setObjectName("content_splitter")
         self.content_splitter.setHandleWidth(12)
 
+        self.setup_saved_searches_panel()
         self.setup_entry_list(driver)
         self.setup_preview_panel(driver)
 
-        self.content_splitter.setStretchFactor(0, 1)
+        self.content_splitter.setStretchFactor(0, 0)
+        self.content_splitter.setStretchFactor(1, 1)
+        self.content_splitter.setStretchFactor(2, 1)
         self.content_layout.addWidget(self.content_splitter)
 
         self.central_layout.addLayout(self.content_layout, 10, 0, 1, 1)
+
+    def setup_saved_searches_panel(self):
+        """Set up the pinned saved-search navigation pane."""
+        self.saved_searches_panel = QWidget()
+        self.saved_searches_panel.setObjectName("saved_searches_panel")
+        self.saved_searches_panel.setMinimumWidth(180)
+        self.saved_searches_panel.setMaximumWidth(280)
+
+        saved_searches_layout = QVBoxLayout(self.saved_searches_panel)
+        saved_searches_layout.setContentsMargins(6, 0, 6, 0)
+        saved_searches_layout.setSpacing(6)
+
+        title = QLabel(Translations["saved_searches.title"])
+        title.setObjectName("saved_searches_title")
+        saved_searches_layout.addWidget(title)
+
+        self.saved_searches_list = QListWidget()
+        self.saved_searches_list.setObjectName("saved_searches_list")
+        self.saved_searches_list.setToolTip(Translations["saved_searches.tooltip"])
+        saved_searches_layout.addWidget(self.saved_searches_list)
+
+        self.save_saved_search_button = QPushButton(Translations["saved_searches.save"])
+        self.save_saved_search_button.setObjectName("save_saved_search_button")
+        self.save_saved_search_button.setEnabled(False)
+        saved_searches_layout.addWidget(self.save_saved_search_button)
+
+        self.content_splitter.addWidget(self.saved_searches_panel)
 
     def setup_entry_list(self, driver: "QtDriver"):
         self.entry_list_container = QWidget()

@@ -211,6 +211,20 @@ class FolderOverride(Base):
     )
 
 
+class SavedSearch(Base):
+    """A named query that can be materialized as a library collection."""
+
+    __tablename__ = "saved_searches"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(nullable=False)
+    query: Mapped[str] = mapped_column(nullable=False)
+    position: Mapped[int] = mapped_column(nullable=False, default=0)
+    is_pinned: Mapped[bool] = mapped_column(nullable=False, default=True)
+
+    __table_args__ = (UniqueConstraint("name", name="uq_saved_searches_name"),)
+
+
 class Entry(Base):
     __tablename__ = "entries"
 

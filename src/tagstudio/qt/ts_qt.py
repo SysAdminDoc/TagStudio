@@ -41,6 +41,8 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
+    QInputDialog,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -685,6 +687,10 @@ class QtDriver(DriverMixin, QObject):
         # Search Field
         self.main_window.search_field.returnPressed.connect(_update_browsing_state)
 
+        # Saved Searches
+        self.main_window.save_saved_search_button.clicked.connect(self.save_current_search)
+        self.main_window.saved_searches_list.itemActivated.connect(self.open_saved_search)
+
         # Sorting Dropdowns
         self.main_window.sorting_mode_combobox.setCurrentIndex(
             list(SortingModeEnum).index(self.browsing_history.current.sorting_mode)
@@ -787,6 +793,7 @@ class QtDriver(DriverMixin, QObject):
         self.__reset_navigation()
 
         self.lib.close()
+        self.refresh_saved_searches()
         self.cache_manager = None
 
         self.thumb_job_queue.queue.clear()
@@ -1485,6 +1492,58 @@ class QtDriver(DriverMixin, QObject):
                 self.main_window.thumb_layout.remove_tags(entry_ids, tag_ids)
                 self.lib.remove_tags_from_entries(entry_ids, tag_ids)
 
+    def refresh_saved_searches(self) -> None:
+        """Refresh the sidebar with pinned saved searches from the open library."""
+        saved_searches_list = self.main_window.saved_searches_list
+        saved_searches_list.clear()
+        if not self.lib.library_dir:
+            saved_searches_list.setEnabled(False)
+            self.main_window.save_saved_search_button.setEnabled(False)
+            return
+
+        for saved_search in self.lib.get_saved_searches(pinned_only=True):
+            item = QListWidgetItem(saved_search.name)
+            item.setData(Qt.ItemDataRole.UserRole, saved_search.id)
+            item.setToolTip(saved_search.query or Translations["saved_searches.all_files"])
+            saved_searches_list.addItem(item)
+
+        saved_searches_list.setEnabled(True)
+        self.main_window.save_saved_search_button.setEnabled(True)
+
+    def open_saved_search(self, item: QListWidgetItem) -> None:
+        """Navigate to the query represented by a sidebar saved-search item."""
+        saved_search_id = item.data(Qt.ItemDataRole.UserRole)
+        if saved_search_id is None:
+            return
+        state = self.lib.saved_search_state(int(saved_search_id))
+        if state is None:
+            self.refresh_saved_searches()
+            return
+        state = (
+            state.with_sorting_mode(self.main_window.sorting_mode)
+            .with_sorting_direction(self.main_window.sorting_direction)
+            .with_show_hidden_entries(self.main_window.show_hidden_entries)
+        )
+        self.update_browsing_state(state)
+
+    def save_current_search(self) -> None:
+        """Prompt for a name and persist the current search as a pinned collection."""
+        if not self.lib.library_dir:
+            return
+        name, accepted = QInputDialog.getText(
+            self.main_window,
+            Translations["saved_searches.save_title"],
+            Translations["saved_searches.name_prompt"],
+        )
+        if not accepted:
+            return
+        try:
+            self.lib.create_saved_search(name, self.main_window.search_field.text())
+        except ValueError as error:
+            self.main_window.status_bar.showMessage(str(error))
+            return
+        self.refresh_saved_searches()
+
     def update_browsing_state(self, state: BrowsingState | None = None) -> None:
         """Navigates to a new BrowsingState when state is given, otherwise updates the results."""
         if not self.lib.library_dir:
@@ -1671,6 +1730,7 @@ class QtDriver(DriverMixin, QObject):
         self.init_workers()
         Ignore.get_patterns(self.lib.library_dir, include_global=True)
         self.__reset_navigation()
+        self.refresh_saved_searches()
 
         # TODO - make this call optional
         if self.lib.entries_count < 10000:

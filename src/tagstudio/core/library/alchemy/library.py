@@ -101,6 +101,7 @@ from tagstudio.core.library.alchemy.models import (
     FolderOverride,
     Namespace,
     Preferences,
+    SavedSearch,
     Tag,
     TagAlias,
     TagColorGroup,
@@ -119,6 +120,7 @@ from tagstudio.core.library.alchemy.sidecars import (
 from tagstudio.core.library.alchemy.visitors import SQLBoolExpressionBuilder
 from tagstudio.core.library.ignore import PATH_GLOB_FLAGS, Ignore, ignore_to_glob
 from tagstudio.core.library.json.library import Library as JsonLibrary
+from tagstudio.core.query_lang.util import ParsingError
 from tagstudio.core.utils.types import unwrap
 from tagstudio.qt.translations import Translations
 
@@ -673,6 +675,149 @@ class Library:
             session.commit()
             return True
 
+    @staticmethod
+    def __validate_saved_search_query(query: str) -> str:
+        normalized_query = query.strip()
+        try:
+            _ = BrowsingState.from_search_query(normalized_query).ast
+        except ParsingError as error:
+            raise ValueError(f"Invalid saved search query: {error}") from error
+        return normalized_query
+
+    def get_saved_searches(self, pinned_only: bool = False) -> list[SavedSearch]:
+        """Return saved searches in their sidebar order."""
+        with Session(self.engine, expire_on_commit=False) as session:
+            statement = select(SavedSearch).order_by(SavedSearch.position, SavedSearch.id)
+            if pinned_only:
+                statement = statement.where(SavedSearch.is_pinned.is_(True))
+            saved_searches = list(session.scalars(statement))
+            session.expunge_all()
+            return saved_searches
+
+    def get_saved_search(self, saved_search_id: int) -> SavedSearch | None:
+        """Return one saved search without leaving it attached to a session."""
+        with Session(self.engine, expire_on_commit=False) as session:
+            saved_search = session.get(SavedSearch, saved_search_id)
+            if saved_search is not None:
+                session.expunge(saved_search)
+            return saved_search
+
+    def saved_search_state(self, saved_search_id: int) -> BrowsingState | None:
+        """Materialize one saved query as a browsing state."""
+        saved_search = self.get_saved_search(saved_search_id)
+        if saved_search is None:
+            return None
+        return BrowsingState.from_search_query(saved_search.query)
+
+    def create_saved_search(
+        self,
+        name: str,
+        query: str,
+        *,
+        is_pinned: bool = True,
+        position: int | None = None,
+    ) -> SavedSearch:
+        """Persist a validated named query for reuse as a smart collection."""
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise ValueError("Saved search name cannot be empty")
+        normalized_query = self.__validate_saved_search_query(query)
+        if position is not None and position < 0:
+            raise ValueError("Saved search position cannot be negative")
+
+        with Session(self.engine, expire_on_commit=False) as session:
+            if position is None:
+                max_position = session.scalar(select(func.max(SavedSearch.position)))
+                position = 0 if max_position is None else max_position + 1
+            saved_search = SavedSearch(
+                name=normalized_name,
+                query=normalized_query,
+                is_pinned=is_pinned,
+                position=position,
+            )
+            session.add(saved_search)
+            try:
+                session.commit()
+            except IntegrityError as error:
+                session.rollback()
+                raise ValueError(
+                    f"A saved search named {normalized_name!r} already exists"
+                ) from error
+            session.expunge(saved_search)
+            return saved_search
+
+    def update_saved_search(
+        self,
+        saved_search_id: int,
+        *,
+        name: str | None = None,
+        query: str | None = None,
+        is_pinned: bool | None = None,
+        position: int | None = None,
+    ) -> SavedSearch | None:
+        """Update a saved search and return its detached record."""
+        normalized_name = name.strip() if name is not None else None
+        if normalized_name == "":
+            raise ValueError("Saved search name cannot be empty")
+        normalized_query = self.__validate_saved_search_query(query) if query is not None else None
+        if position is not None and position < 0:
+            raise ValueError("Saved search position cannot be negative")
+
+        with Session(self.engine, expire_on_commit=False) as session:
+            saved_search = session.get(SavedSearch, saved_search_id)
+            if saved_search is None:
+                return None
+            if normalized_name is not None:
+                saved_search.name = normalized_name
+            if normalized_query is not None:
+                saved_search.query = normalized_query
+            if is_pinned is not None:
+                saved_search.is_pinned = is_pinned
+            if position is not None:
+                saved_search.position = position
+            try:
+                session.commit()
+            except IntegrityError as error:
+                session.rollback()
+                raise ValueError(
+                    f"A saved search named {normalized_name!r} already exists"
+                ) from error
+            session.expunge(saved_search)
+            return saved_search
+
+    def delete_saved_search(self, saved_search_id: int) -> bool:
+        """Delete a saved search, returning whether a record was removed."""
+        with Session(self.engine) as session:
+            saved_search = session.get(SavedSearch, saved_search_id)
+            if saved_search is None:
+                return False
+            session.delete(saved_search)
+            session.commit()
+            return True
+
+    def reorder_saved_searches(self, saved_search_ids: Iterable[int]) -> None:
+        """Set pinned sidebar order while retaining unmentioned searches afterward."""
+        requested_ids = list(saved_search_ids)
+        if len(requested_ids) != len(set(requested_ids)):
+            raise ValueError("Saved search IDs must be unique")
+
+        with Session(self.engine) as session:
+            saved_searches = list(
+                session.scalars(select(SavedSearch).order_by(SavedSearch.position, SavedSearch.id))
+            )
+            saved_by_id = {saved_search.id: saved_search for saved_search in saved_searches}
+            if any(saved_search_id not in saved_by_id for saved_search_id in requested_ids):
+                raise ValueError("Cannot reorder an unknown saved search")
+            ordered = [saved_by_id[saved_search_id] for saved_search_id in requested_ids]
+            ordered.extend(
+                saved_search
+                for saved_search in saved_searches
+                if saved_search.id not in requested_ids
+            )
+            for position, saved_search in enumerate(ordered):
+                saved_search.position = position
+            session.commit()
+
     def get_scan_ignore_patterns(self, root: Path) -> list[str]:
         """Return root ignore rules plus path-prefixed folder override rules."""
         patterns = list(Ignore.get_patterns(root))
@@ -1127,6 +1272,7 @@ class Library:
                 "store configured roots relative to the library",
                 self.__apply_db106_migration,
             ),
+            Migration(107, "add saved searches", lambda _session: None),
         )
 
     def __prepare_legacy_schema(self, session: Session, loaded_db_version: int) -> None:

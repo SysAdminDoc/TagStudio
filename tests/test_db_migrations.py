@@ -68,6 +68,7 @@ def test_library_migrations(path: str):
             (104,),
             (105,),
             (106,),
+            (107,),
         ]
         shutil.rmtree(temp_path)
         assert status.success
