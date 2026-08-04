@@ -63,6 +63,7 @@ from tagstudio.core.library.ignore import Ignore
 from tagstudio.core.library.refresh import IncrementalScanner, RefreshTracker
 from tagstudio.core.library.watcher import FileSystemEvent, LibraryWatcher
 from tagstudio.core.media_types import MediaCategories
+from tagstudio.core.plugins import PluginRegistry
 from tagstudio.core.query_lang.completions import query_completions
 from tagstudio.core.query_lang.util import ParsingError
 from tagstudio.core.ts_core import TagStudioCore
@@ -202,6 +203,7 @@ class QtDriver(DriverMixin, QObject):
 
     lib: Library
     cache_manager: CacheManager
+    plugin_registry: PluginRegistry
     library_watcher: LibraryWatcher | None = None
 
     browsing_history: History[BrowsingState]
@@ -211,6 +213,8 @@ class QtDriver(DriverMixin, QObject):
         # prevent recursive badges update when multiple items selected
         self.badge_update_lock = False
         self.lib = Library()
+        self.plugin_registry = PluginRegistry()
+        self.plugin_registry.load_entry_points()
         self.rm: ResourceManager = ResourceManager()
         self.args = args
         self.frame_content: list[int] = []  # List of Entry IDs for the current query

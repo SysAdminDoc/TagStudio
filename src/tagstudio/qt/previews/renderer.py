@@ -66,6 +66,7 @@ from tagstudio.core.constants import (
 )
 from tagstudio.core.exceptions import NoRendererError
 from tagstudio.core.media_types import MediaCategories, MediaType
+from tagstudio.core.plugins import PreviewRequest, PreviewResult
 from tagstudio.core.utils.encoding import detect_char_encoding
 from tagstudio.core.utils.types import unwrap
 from tagstudio.qt.global_settings import DEFAULT_CACHED_IMAGE_RES
@@ -1759,7 +1760,22 @@ class ThumbRenderer(QObject):
         _filepath: Path = Path(filepath)
         savable_media_type: bool = True
 
-        if _filepath and _filepath.is_file():
+        plugin_result: PreviewResult | None = None
+        plugin_registry = getattr(self.driver, "plugin_registry", None)
+        if _filepath and _filepath.is_file() and plugin_registry is not None:
+            plugin_result = plugin_registry.render_preview(
+                PreviewRequest(
+                    path=_filepath,
+                    size=(adj_size, adj_size),
+                    pixel_ratio=pixel_ratio,
+                    is_grid_thumb=is_grid_thumb,
+                )
+            )
+            if plugin_result is not None:
+                image = plugin_result.image
+                savable_media_type = plugin_result.cacheable
+
+        if _filepath and _filepath.is_file() and plugin_result is None:
             try:
                 ext: str = _filepath.suffix.lower() if _filepath.suffix else _filepath.stem.lower()
                 # Ebooks =======================================================

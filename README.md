@@ -82,6 +82,10 @@ faces into tags. Face clustering uses the bundled OpenCV path; OCR uses a local 
 executable on `PATH` (or a caller-supplied local extractor). These workers are opt-in and do not
 send library data to an online service.
 
+### Plugin Extensions
+
+Third-party packages can expose a `register(registry)` function through the `tagstudio.plugins` Python entry-point group. The registry supports extension- or MIME-matched preview handlers and metadata extractors, with priority ordering and failure isolation so optional plugins can add support for formats such as RAW, PSD, DCM, or GLB without changing TagStudio.
+
 ### [Search](https://docs.tagstud.io/search)
 
 -   Search for file entries based on tags, file path (`path:`), file types (`filetype:`), and even media types! (`mediatype:`). Path searches currently use [glob](<https://en.wikipedia.org/wiki/Glob_(programming)>) syntax, so you may need to wrap your filename or filepath in asterisks while searching. This will not be strictly necessary in future versions of the program.
