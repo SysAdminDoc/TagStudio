@@ -90,6 +90,7 @@ class MainMenuBar(QMenuBar):
     fix_ignored_entries_action: QAction
     fix_dupe_files_action: QAction
     find_hash_duplicates_action: QAction
+    import_external_tags_action: QAction
     watch_rules_action: QAction
     clear_thumb_cache_action: QAction
 
@@ -385,6 +386,13 @@ class MainMenuBar(QMenuBar):
         )
         self.find_hash_duplicates_action.setEnabled(False)
         self.tools_menu.addAction(self.find_hash_duplicates_action)
+
+        # Import tags from external catalogs and metadata sidecars
+        self.import_external_tags_action = QAction(
+            Translations["menu.tools.import_external_tags"], self
+        )
+        self.import_external_tags_action.setEnabled(False)
+        self.tools_menu.addAction(self.import_external_tags_action)
 
         # Automatically apply tags to files matching path or filename regexes
         self.watch_rules_action = QAction(Translations["menu.tools.watch_folder_rules"], self)

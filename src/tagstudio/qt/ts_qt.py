@@ -90,6 +90,7 @@ from tagstudio.qt.mixed.fix_dupe_files import FixDupeFilesModal
 from tagstudio.qt.mixed.fix_unlinked import FixUnlinkedEntriesModal
 from tagstudio.qt.mixed.folders_to_tags import FoldersToTagsModal
 from tagstudio.qt.mixed.hash_duplicates import HashDuplicateModal
+from tagstudio.qt.mixed.interop_import import InteropImportModal
 from tagstudio.qt.mixed.item_thumb import BadgeType
 from tagstudio.qt.mixed.migration_modal import JsonMigrationModal
 from tagstudio.qt.mixed.progress_bar import ProgressWidget
@@ -199,6 +200,7 @@ class QtDriver(DriverMixin, QObject):
     ignored_modal: FixIgnoredEntriesModal
     dupe_modal: FixDupeFilesModal
     hash_duplicates_modal: HashDuplicateModal | None = None
+    interop_import_modal: InteropImportModal | None = None
     watch_rules_modal: WatchRulesModal | None = None
     library_info_window: LibraryInfoWindow
 
@@ -587,6 +589,15 @@ class QtDriver(DriverMixin, QObject):
             create_hash_duplicates_modal
         )
 
+        def create_interop_import_modal():
+            if self.interop_import_modal is None:
+                self.interop_import_modal = InteropImportModal(self.lib, self)
+            self.interop_import_modal.show()
+
+        self.main_window.menu_bar.import_external_tags_action.triggered.connect(
+            create_interop_import_modal
+        )
+
         def create_watch_rules_modal():
             if self.watch_rules_modal is None:
                 self.watch_rules_modal = WatchRulesModal(self.lib, self)
@@ -930,6 +941,11 @@ class QtDriver(DriverMixin, QObject):
             self.main_window.menu_bar.fix_ignored_entries_action.setEnabled(False)
             self.main_window.menu_bar.fix_dupe_files_action.setEnabled(False)
             self.main_window.menu_bar.find_hash_duplicates_action.setEnabled(False)
+            import_external_tags_action = getattr(
+                self.main_window.menu_bar, "import_external_tags_action", None
+            )
+            if import_external_tags_action is not None:
+                import_external_tags_action.setEnabled(False)
             watch_rules_action = getattr(self.main_window.menu_bar, "watch_rules_action", None)
             if watch_rules_action is not None:
                 watch_rules_action.setEnabled(False)
@@ -1822,6 +1838,11 @@ class QtDriver(DriverMixin, QObject):
         self.main_window.menu_bar.fix_ignored_entries_action.setEnabled(True)
         self.main_window.menu_bar.fix_dupe_files_action.setEnabled(True)
         self.main_window.menu_bar.find_hash_duplicates_action.setEnabled(True)
+        import_external_tags_action = getattr(
+            self.main_window.menu_bar, "import_external_tags_action", None
+        )
+        if import_external_tags_action is not None:
+            import_external_tags_action.setEnabled(True)
         watch_rules_action = getattr(self.main_window.menu_bar, "watch_rules_action", None)
         if watch_rules_action is not None:
             watch_rules_action.setEnabled(True)
