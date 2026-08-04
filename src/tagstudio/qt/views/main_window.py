@@ -11,7 +11,7 @@ import structlog
 from PIL import Image, ImageQt
 from PySide6 import QtCore
 from PySide6.QtCore import QMetaObject, QSize, QStringListModel, Qt
-from PySide6.QtGui import QAction, QColor, QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import QAction, QActionGroup, QColor, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpacerItem,
     QSplitter,
+    QStackedWidget,
     QStatusBar,
     QTextEdit,
     QVBoxLayout,
@@ -49,6 +50,7 @@ from tagstudio.qt.mixed.landing import LandingWidget
 from tagstudio.qt.mixed.map_pane import MapPane
 from tagstudio.qt.mixed.pagination import Pagination
 from tagstudio.qt.mixed.tag_widget import get_border_color, get_highlight_color, get_text_color
+from tagstudio.qt.mixed.timeline_pane import TimelinePane
 from tagstudio.qt.mnemonics import assign_mnemonics
 from tagstudio.qt.models.palette import ColorType, get_tag_color
 from tagstudio.qt.platform_strings import trash_term
@@ -91,6 +93,9 @@ class MainMenuBar(QMenuBar):
     view_menu: QMenu
     show_filenames_action: QAction
     compact_layout_action: QAction
+    map_view_action: QAction
+    timeline_view_action: QAction
+    location_view_action_group: QActionGroup
 
     tools_menu: QMenu
     fix_unlinked_entries_action: QAction
@@ -348,6 +353,20 @@ class MainMenuBar(QMenuBar):
         self.compact_layout_action.setStatusTip("Ctrl+Shift+D")
         self.view_menu.addAction(self.compact_layout_action)
 
+        self.map_view_action = QAction(Translations["menu.view.map"], self)
+        self.map_view_action.setCheckable(True)
+        self.view_menu.addAction(self.map_view_action)
+
+        self.timeline_view_action = QAction(Translations["menu.view.timeline"], self)
+        self.timeline_view_action.setCheckable(True)
+        self.view_menu.addAction(self.timeline_view_action)
+
+        self.location_view_action_group = QActionGroup(self)
+        self.location_view_action_group.setExclusive(True)
+        self.location_view_action_group.addAction(self.map_view_action)
+        self.location_view_action_group.addAction(self.timeline_view_action)
+        self.map_view_action.setChecked(True)
+
         self.view_menu.addSeparator()
 
         self.increase_thumbnail_size_action = QAction(
@@ -544,8 +563,10 @@ class MainWindow(QMainWindow):
 
         # initialized in setup_preview_panel
         self.preview_panel: PreviewPanel
-        # initialized in setup_map_panel
+        # initialized in setup_location_panel
         self.map_panel: MapPane
+        self.timeline_panel: TimelinePane
+        self.location_stack: QStackedWidget
         # endregion
 
         if not self.objectName():
@@ -747,7 +768,7 @@ class MainWindow(QMainWindow):
         self.setup_saved_searches_panel()
         self.setup_entry_list(driver)
         self.setup_preview_panel(driver)
-        self.setup_map_panel()
+        self.setup_location_panel()
 
         self.content_splitter.setStretchFactor(0, 0)
         self.content_splitter.setStretchFactor(1, 2)
@@ -821,9 +842,14 @@ class MainWindow(QMainWindow):
         self.preview_panel = PreviewPanel(driver.lib, driver)
         self.content_splitter.addWidget(self.preview_panel)
 
-    def setup_map_panel(self):
+    def setup_location_panel(self):
+        self.location_stack = QStackedWidget()
+        self.location_stack.setObjectName("location_stack")
         self.map_panel = MapPane()
-        self.content_splitter.addWidget(self.map_panel)
+        self.timeline_panel = TimelinePane()
+        self.location_stack.addWidget(self.map_panel)
+        self.location_stack.addWidget(self.timeline_panel)
+        self.content_splitter.addWidget(self.location_stack)
 
     def setup_status_bar(self):
         self.status_bar = QStatusBar(self)

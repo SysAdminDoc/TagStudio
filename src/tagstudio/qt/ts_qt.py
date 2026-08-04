@@ -63,11 +63,16 @@ from tagstudio.core.library.ignore import Ignore
 from tagstudio.core.library.refresh import IncrementalScanner, RefreshTracker
 from tagstudio.core.library.watch_rules import WatchRuleApplyResult, WatchRuleEngine, WatchRuleSet
 from tagstudio.core.library.watcher import FileSystemEvent, LibraryWatcher
-from tagstudio.core.media_metadata import GeoPoint, geo_point_for_entry
+from tagstudio.core.media_metadata import (
+    GeoPoint,
+    geo_point_from_metadata,
+    read_exif_metadata,
+)
 from tagstudio.core.media_types import MediaCategories
 from tagstudio.core.plugins import PluginRegistry
 from tagstudio.core.query_lang.completions import query_completions
 from tagstudio.core.query_lang.util import ParsingError
+from tagstudio.core.timeline import TimelineEvent, timeline_event_from_metadata
 from tagstudio.core.ts_core import TagStudioCore
 from tagstudio.core.utils.str_formatting import is_version_outdated, strip_web_protocol
 from tagstudio.core.utils.types import unwrap
@@ -544,6 +549,17 @@ class QtDriver(DriverMixin, QObject):
         self.main_window.menu_bar.compact_layout_action.triggered.connect(on_compact_layout_action)
         self.main_window.menu_bar.compact_layout_action.setChecked(self.settings.dense_layout)
 
+        def on_map_view_action(checked: bool):
+            if checked:
+                self.main_window.location_stack.setCurrentWidget(self.main_window.map_panel)
+
+        def on_timeline_view_action(checked: bool):
+            if checked:
+                self.main_window.location_stack.setCurrentWidget(self.main_window.timeline_panel)
+
+        self.main_window.menu_bar.map_view_action.triggered.connect(on_map_view_action)
+        self.main_window.menu_bar.timeline_view_action.triggered.connect(on_timeline_view_action)
+
         def on_decrease_thumbnail_size_action():
             new_val = self.main_window.thumb_size_combobox.currentIndex() + 1
             if not (new_val + 1) > len(self.main_window.THUMB_SIZES):
@@ -947,6 +963,7 @@ class QtDriver(DriverMixin, QObject):
         self.main_window.thumb_layout.set_entries([])
         self.main_window.preview_panel.set_selection(self.selected)
         self.main_window.map_panel.clear()
+        self.main_window.timeline_panel.clear()
         self.main_window.toggle_landing_page(enabled=True)
         self.main_window.pagination.setHidden(True)
         try:
@@ -1675,7 +1692,7 @@ class QtDriver(DriverMixin, QObject):
         if entry_id is not None:
             self.main_window.thumb_layout.scroll_to(entry_id)
         self.update_thumbs()
-        self.update_map()
+        self.update_metadata_views()
 
         # update pagination
         page_size = 0 if self.settings.infinite_scroll else self.settings.page_size
@@ -1914,6 +1931,7 @@ class QtDriver(DriverMixin, QObject):
         self._selected = OrderedDict.fromkeys(self.frame_content)
         self.main_window.thumb_layout.update_selected()
         self.main_window.map_panel.set_selected(self.selected)
+        self.main_window.timeline_panel.set_selected(self.selected)
 
     def select_inverse(self):
         selected = OrderedDict()
@@ -1924,6 +1942,7 @@ class QtDriver(DriverMixin, QObject):
         self._selected = selected
         self.main_window.thumb_layout.update_selected()
         self.main_window.map_panel.set_selected(self.selected)
+        self.main_window.timeline_panel.set_selected(self.selected)
 
     def select_entry(self, entry_id: int):
         if entry_id in self._selected:
@@ -1932,6 +1951,7 @@ class QtDriver(DriverMixin, QObject):
             self._selected[entry_id] = None
         self.main_window.thumb_layout.update_selected()
         self.main_window.map_panel.set_selected(self.selected)
+        self.main_window.timeline_panel.set_selected(self.selected)
 
     def select_to_entry(self, entry_id: int):
         if len(self._selected) == 0:
@@ -1951,11 +1971,13 @@ class QtDriver(DriverMixin, QObject):
             self._selected[entry_id] = None
         self.main_window.thumb_layout.update_selected()
         self.main_window.map_panel.set_selected(self.selected)
+        self.main_window.timeline_panel.set_selected(self.selected)
 
     def clear_selected(self):
         self._selected.clear()
         self.main_window.thumb_layout.update_selected()
         self.main_window.map_panel.set_selected(self.selected)
+        self.main_window.timeline_panel.set_selected(self.selected)
 
     def move_grid_selection(self, direction: str, extend: bool = False) -> None:
         """Move the active selection through the entries currently shown in the grid."""
@@ -1999,16 +2021,29 @@ class QtDriver(DriverMixin, QObject):
         self.set_select_actions_visibility()
         self.main_window.preview_panel.set_selection(self.selected)
 
-    def update_map(self) -> None:
-        """Refresh the map pane with GPS-bearing entries from the current result set."""
+    def update_metadata_views(self) -> None:
+        """Refresh map and timeline panes from the current result set's EXIF metadata."""
         if not self.lib.library_dir:
             self.main_window.map_panel.clear()
+            self.main_window.timeline_panel.clear()
             return
 
         points: list[GeoPoint] = []
+        events: list[TimelineEvent] = []
         for entry in self.lib.get_entries_full(self.frame_content):
-            point = geo_point_for_entry(entry, self.lib.resolve_entry_path(entry))
+            path = self.lib.resolve_entry_path(entry)
+            metadata = read_exif_metadata(path)
+            point = geo_point_from_metadata(entry, path, metadata)
             if point is not None:
                 points.append(point)
+            event = timeline_event_from_metadata(entry, path, metadata)
+            if event is not None:
+                events.append(event)
         self.main_window.map_panel.set_points(points)
         self.main_window.map_panel.set_selected(self.selected)
+        self.main_window.timeline_panel.set_events(events)
+        self.main_window.timeline_panel.set_selected(self.selected)
+
+    def update_map(self) -> None:
+        """Refresh metadata panes; retained for callers that request a map refresh."""
+        self.update_metadata_views()

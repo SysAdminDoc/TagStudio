@@ -117,6 +117,8 @@ Use View -> Compact / Dense Layout (or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>D</
 
 The split view keeps the thumbnail grid, detail inspector, and Map View visible together. Entries with EXIF GPS coordinates appear on the MapLibre map, where markers use their tag colors and nearby entries form clusters. Map tiles are loaded from OpenStreetMap; entries without GPS metadata remain available in the grid and inspector.
 
+Use View -> Timeline View to replace the map pane with capture-date buckets sourced from EXIF DateTimeOriginal. Choose Year, Month, or Day zoom to move from a broad archive overview to individual capture days; entries without a capture date remain available in the grid and inspector.
+
 Use Tools -> Find Duplicate Files to run an exact-content BLAKE3 pass. Results are grouped in a read-only view; TagStudio never deletes or merges files from this scan.
 
 Thumbnail previews use a persistent least-recently-used cache and evict older files when the size cap is reached. The global Settings panel controls the default cap; an open library's Settings -> Library Settings tab can override it for that library.

@@ -116,6 +116,8 @@ def read_exif_metadata(path: Path) -> ExifMetadata:
             except (KeyError, TypeError, ValueError):
                 gps = None
             date_time_original = exif.get(DATE_TIME_ORIGINAL)
+            if isinstance(date_time_original, bytes):
+                date_time_original = date_time_original.decode("ascii", errors="ignore")
             if not isinstance(date_time_original, str):
                 date_time_original = None
             return ExifMetadata(_location_from_gps(gps), date_time_original)
@@ -132,9 +134,8 @@ def entry_tag_color(entry: Entry) -> str:
     return DEFAULT_GEO_COLOR
 
 
-def geo_point_for_entry(entry: Entry, path: Path) -> GeoPoint | None:
-    """Build a map point for an entry when its file contains valid GPS EXIF."""
-    metadata = read_exif_metadata(path)
+def geo_point_from_metadata(entry: Entry, path: Path, metadata: ExifMetadata) -> GeoPoint | None:
+    """Build a map point from already-read EXIF metadata."""
     if metadata.location is None:
         return None
     latitude, longitude = metadata.location
@@ -146,3 +147,8 @@ def geo_point_for_entry(entry: Entry, path: Path) -> GeoPoint | None:
         color=entry_tag_color(entry),
         date_time_original=metadata.date_time_original,
     )
+
+
+def geo_point_for_entry(entry: Entry, path: Path) -> GeoPoint | None:
+    """Build a map point for an entry when its file contains valid GPS EXIF."""
+    return geo_point_from_metadata(entry, path, read_exif_metadata(path))
