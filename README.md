@@ -111,6 +111,8 @@ Use Tools -> Import External Tags to import tags from Lightroom `.lrcat` catalog
 
 Use Tools -> Export Read-only Mirror to copy indexed files and standard XMP tag sidecars to an external destination for Immich, PhotoPrism, or a Nextcloud-synced folder. The source library is never modified, and multi-root libraries are separated into stable root directories in the mirror.
 
+The `tagstudio` command also supports headless scripting: `tagstudio query LIBRARY QUERY` emits JSON entry records, `tagstudio tag LIBRARY TAG --path FILE` adds or removes tags, and `tagstudio export LIBRARY DESTINATION --target immich|photoprism|nextcloud` creates the same read-only mirror. Use `--format jsonl` or `--format paths` with `query` for pipeline-friendly output; diagnostics are written to stderr.
+
 Use Tools -> Find Duplicate Files to run an exact-content BLAKE3 pass. Results are grouped in a read-only view; TagStudio never deletes or merges files from this scan.
 
 Thumbnail previews use a persistent least-recently-used cache and evict older files when the size cap is reached. The global Settings panel controls the default cap; an open library's Settings -> Library Settings tab can override it for that library.

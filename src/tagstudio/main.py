@@ -7,17 +7,24 @@
 """TagStudio launcher."""
 
 import argparse
+import sys
 import traceback
 
 import structlog
 
 from tagstudio.core.constants import VERSION, VERSION_BRANCH
-from tagstudio.qt.ts_qt import QtDriver
 
 logger = structlog.get_logger(__name__)
 
+CLI_COMMANDS = frozenset(("query", "tag", "export"))
+
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] in CLI_COMMANDS:
+        from tagstudio.cli import main as cli_main
+
+        return cli_main(sys.argv[1:])
+
     # appid = "cyanvoxel.tagstudio.9"
     # ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(appid)
 
@@ -63,6 +70,8 @@ def main():
         version=f"TagStudio v{VERSION} {VERSION_BRANCH}",
     )
     args = parser.parse_args()
+
+    from tagstudio.qt.ts_qt import QtDriver
 
     driver = QtDriver(args)
     ui_name = "Qt"
