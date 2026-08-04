@@ -102,8 +102,14 @@ class SettingsPanel(PanelWidget):
         self.__build_global_settings()
         self.tab_widget.addTab(self.global_settings_container, Translations["settings.global"])
 
-        # self.__build_library_settings()
-        # self.tab_widget.addTab(self.library_settings_container, Translations["settings.library"])
+        if (
+            self.driver.lib.library_dir
+            and getattr(self.driver, "cache_manager", None) is not None
+        ):
+            self.__build_library_settings()
+            self.tab_widget.addTab(
+                self.library_settings_container, Translations["settings.library"]
+            )
 
         self.root_layout.addWidget(self.tab_widget)
 
@@ -168,7 +174,7 @@ class SettingsPanel(PanelWidget):
         self.thumb_cache_size_layout.setStretch(1, 2)
         self.thumb_cache_size_layout.addWidget(QLabel("MiB"))
         form_layout.addRow(
-            Translations["settings.thumb_cache_size.label"], self.thumb_cache_size_container
+            Translations["settings.thumb_cache_size.default_label"], self.thumb_cache_size_container
         )
 
         # Autoplay
@@ -274,19 +280,37 @@ class SettingsPanel(PanelWidget):
         self.zeropadding_checkbox.setChecked(self.driver.settings.zero_padding)
         form_layout.addRow(Translations["settings.zeropadding.label"], self.zeropadding_checkbox)
 
-    # TODO: Implement Library Settings
-    def __build_library_settings(self):  # pyright: ignore[reportUnusedFunction]
+    def __build_library_settings(self):
         form_layout = QFormLayout(self.library_settings_container)
         form_layout.setContentsMargins(6, 6, 6, 6)
 
-        todo_label = QLabel("TODO")
-        form_layout.addRow(todo_label)
+        self.library_thumb_cache_size_container = QWidget()
+        library_cache_layout = QHBoxLayout(self.library_thumb_cache_size_container)
+        library_cache_layout.setContentsMargins(0, 0, 0, 0)
+        library_cache_layout.setSpacing(6)
+        self.library_thumb_cache_size = QLineEdit()
+        self.library_thumb_cache_size.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.library_thumb_cache_size.setValidator(
+            QDoubleValidator(MIN_THUMB_CACHE_SIZE, 1_000_000_000, 2)
+        )
+        cache_size = self.driver.cache_manager.max_size_mib
+        self.library_thumb_cache_size.setText(str(cache_size).removesuffix(".0"))
+        library_cache_layout.addWidget(self.library_thumb_cache_size)
+        library_cache_layout.addWidget(QLabel("MiB"))
+        form_layout.addRow(
+            Translations["settings.thumb_cache_size.library_label"],
+            self.library_thumb_cache_size_container,
+        )
+
+        help_label = QLabel(Translations["settings.thumb_cache_size.library_help"])
+        help_label.setWordWrap(True)
+        form_layout.addRow(help_label)
 
     def __get_language(self) -> str:
         return list(LANGUAGES.values())[self.language_combobox.currentIndex()]
 
     def get_settings(self) -> dict[str, Any]:  # pyright: ignore[reportExplicitAny]
-        return {
+        settings = {
             "language": self.__get_language(),
             "open_last_loaded_on_startup": self.open_last_lib_checkbox.isChecked(),
             "generate_thumbs": self.generate_thumbs.isChecked(),
@@ -306,6 +330,12 @@ class SettingsPanel(PanelWidget):
             "zero_padding": self.zeropadding_checkbox.isChecked(),
             "splash": self.splash_combobox.currentData(),
         }
+        if hasattr(self, "library_thumb_cache_size"):
+            settings["library_thumb_cache_size"] = max(
+                float(self.library_thumb_cache_size.text()) or DEFAULT_THUMB_CACHE_SIZE,
+                MIN_THUMB_CACHE_SIZE,
+            )
+        return settings
 
     def update_settings(self, driver: "QtDriver"):
         settings = self.get_settings()
@@ -315,6 +345,10 @@ class SettingsPanel(PanelWidget):
         driver.settings.autoplay = settings["autoplay"]
         driver.settings.generate_thumbs = settings["generate_thumbs"]
         driver.settings.thumb_cache_size = settings["thumb_cache_size"]
+        if "library_thumb_cache_size" in settings:
+            cache_manager = getattr(driver, "cache_manager", None)
+            if cache_manager is not None:
+                cache_manager.set_max_size_mib(settings["library_thumb_cache_size"])
         driver.settings.show_filenames_in_grid = settings["show_filenames_in_grid"]
         driver.settings.page_size = settings["page_size"]
         driver.settings.infinite_scroll = settings["infinite_scroll"]

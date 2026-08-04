@@ -103,6 +103,8 @@ Libraries under 10,000 files automatically scan for new or modified files when o
 
 Use Tools -> Find Duplicate Files to run an exact-content BLAKE3 pass. Results are grouped in a read-only view; TagStudio never deletes or merges files from this scan.
 
+Thumbnail previews use a persistent least-recently-used cache and evict older files when the size cap is reached. The global Settings panel controls the default cap; an open library's Settings -> Library Settings tab can override it for that library.
+
 ### Creating Tags
 
 Create a new tag by accessing the "New Tag" option from the Edit menu or by pressing <kbd>Ctrl</kbd>+<kbd>T</kbd> (macOS: <kbd>⌘ Command</kbd>+<kbd>T</kbd>). In the tag creation panel, enter a tag name, optional shorthand name, optional tag aliases, optional parent tags, and an optional color.
