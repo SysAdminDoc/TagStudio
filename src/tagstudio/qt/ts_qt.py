@@ -93,6 +93,7 @@ from tagstudio.qt.mixed.hash_duplicates import HashDuplicateModal
 from tagstudio.qt.mixed.interop_import import InteropImportModal
 from tagstudio.qt.mixed.item_thumb import BadgeType
 from tagstudio.qt.mixed.migration_modal import JsonMigrationModal
+from tagstudio.qt.mixed.mirror_export import MirrorExportModal
 from tagstudio.qt.mixed.progress_bar import ProgressWidget
 from tagstudio.qt.mixed.settings_panel import SettingsPanel
 from tagstudio.qt.mixed.tag_color_manager import TagColorManager
@@ -201,6 +202,7 @@ class QtDriver(DriverMixin, QObject):
     dupe_modal: FixDupeFilesModal
     hash_duplicates_modal: HashDuplicateModal | None = None
     interop_import_modal: InteropImportModal | None = None
+    mirror_export_modal: MirrorExportModal | None = None
     watch_rules_modal: WatchRulesModal | None = None
     library_info_window: LibraryInfoWindow
 
@@ -598,6 +600,15 @@ class QtDriver(DriverMixin, QObject):
             create_interop_import_modal
         )
 
+        def create_mirror_export_modal():
+            if self.mirror_export_modal is None:
+                self.mirror_export_modal = MirrorExportModal(self.lib, self)
+            self.mirror_export_modal.show()
+
+        self.main_window.menu_bar.export_mirror_action.triggered.connect(
+            create_mirror_export_modal
+        )
+
         def create_watch_rules_modal():
             if self.watch_rules_modal is None:
                 self.watch_rules_modal = WatchRulesModal(self.lib, self)
@@ -946,6 +957,9 @@ class QtDriver(DriverMixin, QObject):
             )
             if import_external_tags_action is not None:
                 import_external_tags_action.setEnabled(False)
+            export_mirror_action = getattr(self.main_window.menu_bar, "export_mirror_action", None)
+            if export_mirror_action is not None:
+                export_mirror_action.setEnabled(False)
             watch_rules_action = getattr(self.main_window.menu_bar, "watch_rules_action", None)
             if watch_rules_action is not None:
                 watch_rules_action.setEnabled(False)
@@ -1843,6 +1857,9 @@ class QtDriver(DriverMixin, QObject):
         )
         if import_external_tags_action is not None:
             import_external_tags_action.setEnabled(True)
+        export_mirror_action = getattr(self.main_window.menu_bar, "export_mirror_action", None)
+        if export_mirror_action is not None:
+            export_mirror_action.setEnabled(True)
         watch_rules_action = getattr(self.main_window.menu_bar, "watch_rules_action", None)
         if watch_rules_action is not None:
             watch_rules_action.setEnabled(True)

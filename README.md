@@ -109,6 +109,8 @@ Use Tools -> Watch Folder Rules to apply existing tags automatically from path o
 
 Use Tools -> Import External Tags to import tags from Lightroom `.lrcat` catalogs, digiKam databases, Hydrus databases, or ExifTool JSON/XMP sidecars. Catalogs are opened read-only; Lightroom and digiKam records match by path, Hydrus records match by SHA-256, and unmatched records are reported without changing files or external databases.
 
+Use Tools -> Export Read-only Mirror to copy indexed files and standard XMP tag sidecars to an external destination for Immich, PhotoPrism, or a Nextcloud-synced folder. The source library is never modified, and multi-root libraries are separated into stable root directories in the mirror.
+
 Use Tools -> Find Duplicate Files to run an exact-content BLAKE3 pass. Results are grouped in a read-only view; TagStudio never deletes or merges files from this scan.
 
 Thumbnail previews use a persistent least-recently-used cache and evict older files when the size cap is reached. The global Settings panel controls the default cap; an open library's Settings -> Library Settings tab can override it for that library.

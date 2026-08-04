@@ -394,6 +394,11 @@ class MainMenuBar(QMenuBar):
         self.import_external_tags_action.setEnabled(False)
         self.tools_menu.addAction(self.import_external_tags_action)
 
+        # Export a read-only filesystem mirror for an external photo manager
+        self.export_mirror_action = QAction(Translations["menu.tools.export_mirror"], self)
+        self.export_mirror_action.setEnabled(False)
+        self.tools_menu.addAction(self.export_mirror_action)
+
         # Automatically apply tags to files matching path or filename regexes
         self.watch_rules_action = QAction(Translations["menu.tools.watch_folder_rules"], self)
         self.watch_rules_action.setEnabled(False)
