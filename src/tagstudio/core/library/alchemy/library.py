@@ -11,7 +11,7 @@ import re
 import shutil
 import time
 import unicodedata
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from os import makedirs
@@ -136,6 +136,12 @@ class ReservedNamespaceError(Exception):
 
     Reserved namespace prefix: "tagstudio".
     """
+
+    pass
+
+
+class BulkTagError(ValueError):
+    """Raise when a bulk tag operation cannot be applied safely."""
 
     pass
 
@@ -2604,6 +2610,371 @@ class Library:
     ) -> None:
         """Edit a Tag in the Library."""
         self.add_tag(tag, parent_ids, alias_names, alias_ids)
+
+    @staticmethod
+    def __bulk_tag_ids(values: Iterable[int] | int) -> set[int]:
+        if isinstance(values, int):
+            return {values}
+        try:
+            return {int(value) for value in values}
+        except (TypeError, ValueError) as error:
+            raise BulkTagError("Tag and entry IDs must be integers") from error
+
+    @staticmethod
+    def __assert_acyclic_parent_edges(edges: Iterable[tuple[int, int]]) -> None:
+        children_by_parent: dict[int, set[int]] = {}
+        nodes: set[int] = set()
+        for parent_id, child_id in edges:
+            nodes.update((parent_id, child_id))
+            children_by_parent.setdefault(parent_id, set()).add(child_id)
+
+        visiting: set[int] = set()
+        visited: set[int] = set()
+
+        def visit(node_id: int) -> None:
+            if node_id in visiting:
+                raise BulkTagError("Tag parent relationships cannot contain a cycle")
+            if node_id in visited:
+                return
+
+            visiting.add(node_id)
+            for child_id in children_by_parent.get(node_id, set()):
+                visit(child_id)
+            visiting.remove(node_id)
+            visited.add(node_id)
+
+        for node_id in nodes:
+            visit(node_id)
+
+    def rename_tags(self, renames: Mapping[int, str]) -> dict[int, str]:
+        """Rename several tags atomically while preserving their relationships and entries."""
+        if not renames:
+            return {}
+
+        normalized: dict[int, str] = {}
+        for tag_id, name in renames.items():
+            if not isinstance(name, str) or not name.strip():
+                raise BulkTagError("Tag names must not be empty")
+            normalized[int(tag_id)] = name.strip()
+
+        normalized_names = [name.casefold() for name in normalized.values()]
+        if len(normalized_names) != len(set(normalized_names)):
+            raise BulkTagError("Bulk renames must use distinct tag names")
+
+        with Session(self.engine) as session:
+            tags = list(session.scalars(select(Tag)))
+            tags_by_id = {tag.id: tag for tag in tags}
+            missing_ids = set(normalized).difference(tags_by_id)
+            if missing_ids:
+                raise BulkTagError(f"Unknown tag IDs: {sorted(missing_ids)}")
+
+            names_by_casefold = {tag.name.casefold(): tag.id for tag in tags}
+            renamed_ids = set(normalized)
+            for _tag_id, name in normalized.items():
+                existing_id = names_by_casefold.get(name.casefold())
+                if existing_id is not None and existing_id not in renamed_ids:
+                    raise BulkTagError(f"A tag named {name!r} already exists")
+
+            for tag_id, name in normalized.items():
+                tags_by_id[tag_id].name = name
+            session.commit()
+
+        return normalized
+
+    def bulk_rename_tags(self, renames: Mapping[int, str]) -> dict[int, str]:
+        """Compatibility alias for :meth:`rename_tags`."""
+        return self.rename_tags(renames)
+
+    def merge_tags(self, source_tag_ids: Iterable[int], target_tag_id: int) -> int:
+        """Merge source tags into one target tag in a single transaction.
+
+        Entry assignments, aliases, parent and child relationships, and disambiguation
+        references are redirected to the target before the source tags are removed.
+        """
+        source_ids = self.__bulk_tag_ids(source_tag_ids)
+        target_id = int(target_tag_id)
+        if not source_ids:
+            raise BulkTagError("At least one source tag is required")
+        if target_id in source_ids:
+            raise BulkTagError("The merge target must not also be a source tag")
+        reserved_sources = source_ids.intersection(range(RESERVED_TAG_START, RESERVED_TAG_END))
+        if reserved_sources:
+            raise BulkTagError("Built-in tags cannot be removed by a merge")
+
+        with Session(self.engine) as session:
+            all_ids = source_ids | {target_id}
+            tags = list(session.scalars(select(Tag).where(Tag.id.in_(all_ids))))
+            tags_by_id = {tag.id: tag for tag in tags}
+            missing_ids = all_ids.difference(tags_by_id)
+            if missing_ids:
+                raise BulkTagError(f"Unknown tag IDs: {sorted(missing_ids)}")
+
+            source_tags = [tags_by_id[tag_id] for tag_id in source_ids]
+
+            source_entry_ids = set(
+                session.scalars(
+                    select(TagEntry.entry_id).where(TagEntry.tag_id.in_(source_ids))
+                )
+            )
+            target_entry_ids = set(
+                session.scalars(select(TagEntry.entry_id).where(TagEntry.tag_id == target_id))
+            )
+            session.add_all(
+                TagEntry(tag_id=target_id, entry_id=entry_id)
+                for entry_id in source_entry_ids.difference(target_entry_ids)
+            )
+            session.execute(delete(TagEntry).where(TagEntry.tag_id.in_(source_ids)))
+
+            target_aliases = list(
+                session.scalars(select(TagAlias).where(TagAlias.tag_id == target_id))
+            )
+            alias_names = {alias.name.casefold() for alias in target_aliases}
+            target_name = tags_by_id[target_id].name.casefold()
+            aliases_to_add: list[TagAlias] = []
+            for source_tag in source_tags:
+                source_aliases = list(
+                    session.scalars(select(TagAlias).where(TagAlias.tag_id == source_tag.id))
+                )
+                for alias_name in [source_tag.name, *(alias.name for alias in source_aliases)]:
+                    if (
+                        not alias_name.strip()
+                        or alias_name.casefold() == target_name
+                        or alias_name.casefold() in alias_names
+                    ):
+                        continue
+                    aliases_to_add.append(TagAlias(alias_name, target_id))
+                    alias_names.add(alias_name.casefold())
+            session.add_all(aliases_to_add)
+            session.execute(delete(TagAlias).where(TagAlias.tag_id.in_(source_ids)))
+
+            parent_rows = list(session.scalars(select(TagParent)))
+            parent_edges: set[tuple[int, int]] = set()
+            for row in parent_rows:
+                if row.parent_id in source_ids or row.child_id in source_ids:
+                    parent_id = target_id if row.parent_id in source_ids else row.parent_id
+                    child_id = target_id if row.child_id in source_ids else row.child_id
+                    if parent_id != child_id:
+                        parent_edges.add((parent_id, child_id))
+                else:
+                    parent_edges.add((row.parent_id, row.child_id))
+
+            self.__assert_acyclic_parent_edges(parent_edges)
+            session.execute(delete(TagParent))
+            session.flush()
+            session.expunge_all()
+            session.add_all(
+                TagParent(parent_id=parent_id, child_id=child_id)
+                for parent_id, child_id in parent_edges
+            )
+
+            session.execute(
+                update(Tag)
+                .where(Tag.disambiguation_id.in_(source_ids))
+                .values(disambiguation_id=target_id)
+            )
+            session.execute(delete(Tag).where(Tag.id.in_(source_ids)))
+            session.commit()
+
+        return target_id
+
+    def bulk_merge_tags(self, source_tag_ids: Iterable[int], target_tag_id: int) -> int:
+        """Compatibility alias for :meth:`merge_tags`."""
+        return self.merge_tags(source_tag_ids, target_tag_id)
+
+    def split_tag(
+        self,
+        tag_id: int,
+        splits: Mapping[str, Iterable[int]],
+        *,
+        remove_original: bool = True,
+    ) -> dict[str, int]:
+        """Create tags from disjoint entry subsets of an existing tag atomically.
+
+        Every assigned entry must already have ``tag_id``. New tags inherit the source
+        tag's parent relationships and visual category settings. The source tag itself
+        remains available; ``remove_original`` controls only its assignments.
+        """
+        source_id = int(tag_id)
+        if source_id in range(RESERVED_TAG_START, RESERVED_TAG_END):
+            raise BulkTagError("Built-in tags cannot be split")
+        if not splits:
+            raise BulkTagError("At least one split tag is required")
+
+        normalized_splits: dict[str, set[int]] = {}
+        names_seen: set[str] = set()
+        for raw_name, raw_entry_ids in splits.items():
+            if not isinstance(raw_name, str) or not raw_name.strip():
+                raise BulkTagError("Split tag names must not be empty")
+            name = raw_name.strip()
+            name_key = name.casefold()
+            if name_key in names_seen:
+                raise BulkTagError("Split tag names must be distinct")
+            names_seen.add(name_key)
+            entry_ids = self.__bulk_tag_ids(raw_entry_ids)
+            if not entry_ids:
+                raise BulkTagError(f"Split tag {name!r} has no entries")
+            normalized_splits[name] = entry_ids
+
+        all_entry_ids = set().union(*normalized_splits.values())
+        owners: dict[int, str] = {}
+        for name, entry_ids in normalized_splits.items():
+            for entry_id in entry_ids:
+                if entry_id in owners:
+                    raise BulkTagError(
+                        f"Entry {entry_id} is assigned to more than one split tag"
+                    )
+                owners[entry_id] = name
+
+        with Session(self.engine) as session:
+            source = session.scalar(select(Tag).where(Tag.id == source_id))
+            if source is None:
+                raise BulkTagError(f"Unknown tag ID: {source_id}")
+
+            tags = list(session.scalars(select(Tag)))
+            names_by_casefold = {tag.name.casefold(): tag.id for tag in tags}
+            for name in normalized_splits:
+                if name.casefold() in names_by_casefold:
+                    raise BulkTagError(f"A tag named {name!r} already exists")
+
+            existing_entry_ids = set(
+                session.scalars(
+                    select(TagEntry.entry_id).where(
+                        TagEntry.tag_id == source_id,
+                        TagEntry.entry_id.in_(all_entry_ids),
+                    )
+                )
+            )
+            missing_entry_ids = all_entry_ids.difference(existing_entry_ids)
+            if missing_entry_ids:
+                raise BulkTagError(
+                    "All split entries must already have the source tag: "
+                    f"{sorted(missing_entry_ids)}"
+                )
+
+            source_parent_ids = set(
+                session.scalars(
+                    select(TagParent.parent_id).where(TagParent.child_id == source_id)
+                )
+            )
+            created_ids: dict[str, int] = {}
+            for name in normalized_splits:
+                new_tag = Tag(
+                    name=name,
+                    color_namespace=source.color_namespace,
+                    color_slug=source.color_slug,
+                    is_category=source.is_category,
+                    is_hidden=source.is_hidden,
+                )
+                session.add(new_tag)
+                session.flush()
+                created_ids[name] = new_tag.id
+                session.add_all(
+                    TagParent(parent_id=parent_id, child_id=new_tag.id)
+                    for parent_id in source_parent_ids
+                )
+                session.add_all(
+                    TagEntry(tag_id=new_tag.id, entry_id=entry_id)
+                    for entry_id in normalized_splits[name]
+                )
+
+            if remove_original:
+                session.execute(
+                    delete(TagEntry).where(
+                        TagEntry.tag_id == source_id,
+                        TagEntry.entry_id.in_(all_entry_ids),
+                    )
+                )
+            session.commit()
+
+        return created_ids
+
+    def bulk_split_tag(
+        self,
+        tag_id: int,
+        splits: Mapping[str, Iterable[int]],
+        *,
+        remove_original: bool = True,
+    ) -> dict[str, int]:
+        """Compatibility alias for :meth:`split_tag`."""
+        return self.split_tag(tag_id, splits, remove_original=remove_original)
+
+    def reparent_tags(
+        self,
+        tag_ids: Iterable[int] | Mapping[int, Iterable[int]],
+        parent_ids: Iterable[int] | None = None,
+    ) -> dict[int, set[int]]:
+        """Replace parent relationships for one or more tags atomically.
+
+        ``tag_ids`` may be a sequence paired with one shared ``parent_ids`` iterable,
+        or a mapping of child IDs to their individual parent ID iterables.
+        """
+        if isinstance(tag_ids, Mapping):
+            if parent_ids is not None:
+                raise BulkTagError("Parent IDs cannot be supplied with a replacement mapping")
+            replacements = {
+                int(child_id): self.__bulk_tag_ids(raw_parent_ids)
+                for child_id, raw_parent_ids in tag_ids.items()
+            }
+        else:
+            if parent_ids is None:
+                raise BulkTagError("Parent IDs are required")
+            selected_ids = self.__bulk_tag_ids(tag_ids)
+            shared_parent_ids = self.__bulk_tag_ids(parent_ids)
+            replacements = {
+                child_id: set(shared_parent_ids) for child_id in selected_ids
+            }
+
+        if not replacements:
+            return {}
+        if any(child_id in replacement for child_id, replacement in replacements.items()):
+            raise BulkTagError("A tag cannot be its own parent")
+
+        all_parent_ids = set().union(*(parents for parents in replacements.values()))
+        all_tag_ids = set(replacements) | all_parent_ids
+
+        with Session(self.engine) as session:
+            existing_ids = set(session.scalars(select(Tag.id).where(Tag.id.in_(all_tag_ids))))
+            missing_ids = all_tag_ids.difference(existing_ids)
+            if missing_ids:
+                raise BulkTagError(f"Unknown tag IDs: {sorted(missing_ids)}")
+
+            current_edges = {
+                (row.parent_id, row.child_id) for row in session.scalars(select(TagParent))
+            }
+            proposed_edges = {
+                edge for edge in current_edges if edge[1] not in replacements
+            }
+            proposed_edges.update(
+                (parent_id, child_id)
+                for child_id, replacement in replacements.items()
+                for parent_id in replacement
+            )
+            self.__assert_acyclic_parent_edges(proposed_edges)
+
+            session.execute(
+                delete(TagParent).where(TagParent.child_id.in_(set(replacements)))
+            )
+            session.add_all(
+                TagParent(parent_id=parent_id, child_id=child_id)
+                for child_id, replacement in replacements.items()
+                for parent_id in replacement
+            )
+
+            tags = session.scalars(select(Tag).where(Tag.id.in_(set(replacements))))
+            for tag in tags:
+                if tag.disambiguation_id not in replacements[tag.id]:
+                    tag.disambiguation_id = None
+            session.commit()
+
+        return replacements
+
+    def bulk_reparent_tags(
+        self,
+        tag_ids: Iterable[int] | Mapping[int, Iterable[int]],
+        parent_ids: Iterable[int] | None = None,
+    ) -> dict[int, set[int]]:
+        """Compatibility alias for :meth:`reparent_tags`."""
+        return self.reparent_tags(tag_ids, parent_ids)
 
     def update_color(self, old_color_group: TagColorGroup, new_color_group: TagColorGroup) -> None:
         """Update a TagColorGroup in the Library. If it doesn't already exist, create it."""

@@ -10,6 +10,7 @@ from tagstudio.core.constants import RESERVED_TAG_END, RESERVED_TAG_START
 from tagstudio.core.library.alchemy.library import Library
 from tagstudio.core.library.alchemy.models import Tag
 from tagstudio.qt.mixed.build_tag import BuildTagPanel
+from tagstudio.qt.mixed.bulk_tag import BulkTagEditorPanel
 from tagstudio.qt.mixed.tag_search import TagSearchPanel
 from tagstudio.qt.translations import Translations
 from tagstudio.qt.views.panel_modal import PanelModal
@@ -26,10 +27,24 @@ class TagDatabasePanel(TagSearchPanel):
         super().__init__(library, is_tag_chooser=False)
         self.driver = driver
 
+        self.bulk_edit_button = QPushButton(Translations["bulk_tags.open"])
+        self.bulk_edit_button.clicked.connect(self.open_bulk_editor)
+
         self.create_tag_button = QPushButton(Translations["tag.create"])
         self.create_tag_button.clicked.connect(lambda: self.build_tag(self.search_field.text()))
 
+        self.root_layout.addWidget(self.bulk_edit_button)
         self.root_layout.addWidget(self.create_tag_button)
+
+    def open_bulk_editor(self) -> None:
+        panel = BulkTagEditorPanel(self.lib)
+        self.bulk_editor_modal = PanelModal(
+            panel,
+            Translations["bulk_tags.title"],
+            has_save=False,
+        )
+        panel.changed.connect(lambda: self.update_tags(self.search_field.text()))
+        self.bulk_editor_modal.show()
 
     def build_tag(self, name: str):
         panel = BuildTagPanel(self.lib)
