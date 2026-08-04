@@ -2351,9 +2351,16 @@ class Library:
                 return None
 
     def add_tags_to_entries(
-        self, entry_ids: int | list[int] | set[int], tag_ids: int | list[int] | set[int]
+        self,
+        entry_ids: int | Iterable[int],
+        tag_ids: int | Iterable[int],
+        *,
+        include_parents: bool = False,
     ) -> int:
         """Add one or more tags to one or more entries.
+
+        When ``include_parents`` is true, the complete parent implication chain for
+        each supplied tag is materialized on the entries as well.
 
         Returns:
             The total number of tags added across all entries.
@@ -2365,8 +2372,10 @@ class Library:
             tag_ids=tag_ids,
         )
 
-        entry_ids_ = [entry_ids] if isinstance(entry_ids, int) else entry_ids
-        tag_ids_ = [tag_ids] if isinstance(tag_ids, int) else tag_ids
+        entry_ids_ = [entry_ids] if isinstance(entry_ids, int) else list(entry_ids)
+        tag_ids_ = [tag_ids] if isinstance(tag_ids, int) else list(tag_ids)
+        if include_parents:
+            tag_ids_ = list(self.get_implied_tag_ids(tag_ids_))
         with Session(self.engine, expire_on_commit=False) as session:
             for tag_id in tag_ids_:
                 for entry_id in entry_ids_:
@@ -2378,6 +2387,107 @@ class Library:
                         session.rollback()
 
         return total_added
+
+    def get_implied_tag_ids(
+        self, tag_ids: Iterable[int] | int, *, include_self: bool = True
+    ) -> set[int]:
+        """Return tags implied by the supplied tags through their parent graph.
+
+        A parent relationship is directional: ``kitten`` implies ``cat`` when kitten
+        has cat as a parent. The result includes every transitive ancestor, and can
+        optionally omit the originally supplied IDs.
+        """
+        requested_ids = self.__bulk_tag_ids(tag_ids)
+        if not requested_ids:
+            return set()
+
+        with Session(self.engine) as session:
+            existing_ids = set(
+                session.scalars(select(Tag.id).where(Tag.id.in_(requested_ids)))
+            )
+            missing_ids = requested_ids.difference(existing_ids)
+            if missing_ids:
+                raise BulkTagError(f"Unknown tag IDs: {sorted(missing_ids)}")
+
+            implied_ids = set(requested_ids) if include_self else set()
+            pending_ids = set(requested_ids)
+            while pending_ids:
+                parent_ids = set(
+                    session.scalars(
+                        select(TagParent.parent_id).where(TagParent.child_id.in_(pending_ids))
+                    )
+                ).difference(implied_ids)
+                implied_ids.update(parent_ids)
+                pending_ids = parent_ids
+
+        return implied_ids
+
+    def apply_tag_inheritance(self, entry_ids: Iterable[int] | int | None = None) -> int:
+        """Materialize all currently implied parent tags on selected entries.
+
+        The operation is idempotent and applies to the complete library when no entry
+        IDs are provided. Existing direct and inherited assignments are preserved.
+        """
+        selected_entry_ids = (
+            None
+            if entry_ids is None
+            else self.__bulk_tag_ids(entry_ids)
+        )
+
+        with Session(self.engine, expire_on_commit=False) as session:
+            if selected_entry_ids is None:
+                selected_entry_ids = set(session.scalars(select(Entry.id)))
+            else:
+                existing_entry_ids = set(
+                    session.scalars(select(Entry.id).where(Entry.id.in_(selected_entry_ids)))
+                )
+                missing_entry_ids = selected_entry_ids.difference(existing_entry_ids)
+                if missing_entry_ids:
+                    raise BulkTagError(f"Unknown entry IDs: {sorted(missing_entry_ids)}")
+
+            if not selected_entry_ids:
+                return 0
+
+            parent_ids_by_child: dict[int, set[int]] = {}
+            for row in session.scalars(select(TagParent)):
+                parent_ids_by_child.setdefault(row.child_id, set()).add(row.parent_id)
+
+            tag_entries = list(
+                session.scalars(
+                    select(TagEntry).where(TagEntry.entry_id.in_(selected_entry_ids))
+                )
+            )
+            entries_by_id: dict[int, set[int]] = {}
+            existing_pairs = {
+                (tag_entry.tag_id, tag_entry.entry_id) for tag_entry in tag_entries
+            }
+            pending_pairs: set[tuple[int, int]] = set()
+
+            for tag_entry in tag_entries:
+                pending_tag_ids = list(parent_ids_by_child.get(tag_entry.tag_id, set()))
+                seen_tag_ids = {tag_entry.tag_id}
+                while pending_tag_ids:
+                    implied_tag_id = pending_tag_ids.pop()
+                    if implied_tag_id in seen_tag_ids:
+                        continue
+                    seen_tag_ids.add(implied_tag_id)
+                    entries_by_id.setdefault(tag_entry.entry_id, set()).add(implied_tag_id)
+                    pending_tag_ids.extend(parent_ids_by_child.get(implied_tag_id, set()))
+
+            for entry_id, implied_tag_ids in entries_by_id.items():
+                pending_pairs.update(
+                    (tag_id, entry_id)
+                    for tag_id in implied_tag_ids
+                    if (tag_id, entry_id) not in existing_pairs
+                )
+
+            session.add_all(
+                TagEntry(tag_id=tag_id, entry_id=entry_id)
+                for tag_id, entry_id in pending_pairs
+            )
+            session.commit()
+
+        return len(pending_pairs)
 
     def remove_tags_from_entries(
         self, entry_ids: int | list[int] | set[int], tag_ids: int | list[int] | set[int]

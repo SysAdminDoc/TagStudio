@@ -95,6 +95,15 @@ class BulkTagEditorPanel(PanelWidget):
             Translations["bulk_tags.reparent"],
         )
 
+        inheritance_layout = QVBoxLayout()
+        inheritance_layout.addWidget(QLabel(Translations["bulk_tags.inheritance_help"]))
+        inheritance_layout.addWidget(self.__make_apply_button(self.apply_inheritance))
+        inheritance_layout.addStretch(1)
+        self.tabs.addTab(
+            self.__layout_widget(inheritance_layout),
+            Translations["bulk_tags.inheritance"],
+        )
+
         self.status_label = QLabel()
         self.status_label.setWordWrap(True)
         self.root_layout.addWidget(self.status_label)
@@ -211,5 +220,14 @@ class BulkTagEditorPanel(PanelWidget):
             parent_ids = [] if not parent_text else [self.__resolve_tag(parent_text)]
             self.lib.reparent_tags(child_ids, parent_ids)
             self.__success(Translations["bulk_tags.reparent_success"])
+        except (BulkTagError, ValueError) as error:
+            self.__failure(error)
+
+    def apply_inheritance(self) -> None:
+        try:
+            added_count = self.lib.apply_tag_inheritance()
+            self.__success(
+                Translations.format("bulk_tags.inheritance_success", count=added_count)
+            )
         except (BulkTagError, ValueError) as error:
             self.__failure(error)

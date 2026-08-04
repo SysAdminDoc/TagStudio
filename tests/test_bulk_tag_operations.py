@@ -121,3 +121,37 @@ def test_reparent_tags_rejects_cycles_without_partial_updates(library: Library):
 
     assert unwrap(library.get_tag(child.id)).parent_ids == [parent.id]
     assert unwrap(library.get_tag(parent.id)).parent_ids == []
+
+
+def test_tag_inheritance_expands_transitive_parents_and_is_idempotent(library: Library):
+    animal = add_tag(library, "animal")
+    cat = add_tag(library, "cat")
+    kitten = add_tag(library, "kitten")
+    library.reparent_tags(cat.id, {animal.id})
+    library.reparent_tags(kitten.id, {cat.id})
+
+    assert library.get_implied_tag_ids(kitten.id) == {kitten.id, cat.id, animal.id}
+    assert library.get_implied_tag_ids(kitten.id, include_self=False) == {cat.id, animal.id}
+    assert library.add_tags_to_entries(1, kitten.id, include_parents=True) == 3
+    assert library.get_tag_entries({animal.id, cat.id, kitten.id}, {1}) == {
+        animal.id: {1},
+        cat.id: {1},
+        kitten.id: {1},
+    }
+    assert library.apply_tag_inheritance(1) == 0
+
+
+def test_apply_tag_inheritance_materializes_existing_assignments(library: Library):
+    animal = add_tag(library, "animal")
+    cat = add_tag(library, "cat")
+    kitten = add_tag(library, "kitten")
+    library.reparent_tags(cat.id, {animal.id})
+    library.reparent_tags(kitten.id, {cat.id})
+    library.add_tags_to_entries(2, kitten.id)
+
+    assert library.apply_tag_inheritance(2) == 3
+    assert library.get_tag_entries({animal.id, cat.id, kitten.id}, {2}) == {
+        animal.id: {2},
+        cat.id: {2},
+        kitten.id: {2},
+    }
