@@ -46,6 +46,7 @@ from tagstudio.core.library.alchemy.enums import SortingModeEnum, TagColorEnum
 from tagstudio.qt.controllers.preview_panel_controller import PreviewPanel
 from tagstudio.qt.helpers.color_overlay import theme_fg_overlay
 from tagstudio.qt.mixed.landing import LandingWidget
+from tagstudio.qt.mixed.map_pane import MapPane
 from tagstudio.qt.mixed.pagination import Pagination
 from tagstudio.qt.mixed.tag_widget import get_border_color, get_highlight_color, get_text_color
 from tagstudio.qt.mnemonics import assign_mnemonics
@@ -543,6 +544,8 @@ class MainWindow(QMainWindow):
 
         # initialized in setup_preview_panel
         self.preview_panel: PreviewPanel
+        # initialized in setup_map_panel
+        self.map_panel: MapPane
         # endregion
 
         if not self.objectName():
@@ -744,10 +747,12 @@ class MainWindow(QMainWindow):
         self.setup_saved_searches_panel()
         self.setup_entry_list(driver)
         self.setup_preview_panel(driver)
+        self.setup_map_panel()
 
         self.content_splitter.setStretchFactor(0, 0)
-        self.content_splitter.setStretchFactor(1, 1)
+        self.content_splitter.setStretchFactor(1, 2)
         self.content_splitter.setStretchFactor(2, 1)
+        self.content_splitter.setStretchFactor(3, 1)
         self.content_layout.addWidget(self.content_splitter)
 
         self.central_layout.addLayout(self.content_layout, 10, 0, 1, 1)
@@ -815,6 +820,10 @@ class MainWindow(QMainWindow):
     def setup_preview_panel(self, driver: "QtDriver"):
         self.preview_panel = PreviewPanel(driver.lib, driver)
         self.content_splitter.addWidget(self.preview_panel)
+
+    def setup_map_panel(self):
+        self.map_panel = MapPane()
+        self.content_splitter.addWidget(self.map_panel)
 
     def setup_status_bar(self):
         self.status_bar = QStatusBar(self)

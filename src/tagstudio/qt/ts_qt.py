@@ -63,6 +63,7 @@ from tagstudio.core.library.ignore import Ignore
 from tagstudio.core.library.refresh import IncrementalScanner, RefreshTracker
 from tagstudio.core.library.watch_rules import WatchRuleApplyResult, WatchRuleEngine, WatchRuleSet
 from tagstudio.core.library.watcher import FileSystemEvent, LibraryWatcher
+from tagstudio.core.media_metadata import GeoPoint, geo_point_for_entry
 from tagstudio.core.media_types import MediaCategories
 from tagstudio.core.plugins import PluginRegistry
 from tagstudio.core.query_lang.completions import query_completions
@@ -945,6 +946,7 @@ class QtDriver(DriverMixin, QObject):
 
         self.main_window.thumb_layout.set_entries([])
         self.main_window.preview_panel.set_selection(self.selected)
+        self.main_window.map_panel.clear()
         self.main_window.toggle_landing_page(enabled=True)
         self.main_window.pagination.setHidden(True)
         try:
@@ -1673,6 +1675,7 @@ class QtDriver(DriverMixin, QObject):
         if entry_id is not None:
             self.main_window.thumb_layout.scroll_to(entry_id)
         self.update_thumbs()
+        self.update_map()
 
         # update pagination
         page_size = 0 if self.settings.infinite_scroll else self.settings.page_size
@@ -1910,6 +1913,7 @@ class QtDriver(DriverMixin, QObject):
     def select_all(self):
         self._selected = OrderedDict.fromkeys(self.frame_content)
         self.main_window.thumb_layout.update_selected()
+        self.main_window.map_panel.set_selected(self.selected)
 
     def select_inverse(self):
         selected = OrderedDict()
@@ -1919,6 +1923,7 @@ class QtDriver(DriverMixin, QObject):
 
         self._selected = selected
         self.main_window.thumb_layout.update_selected()
+        self.main_window.map_panel.set_selected(self.selected)
 
     def select_entry(self, entry_id: int):
         if entry_id in self._selected:
@@ -1926,6 +1931,7 @@ class QtDriver(DriverMixin, QObject):
         else:
             self._selected[entry_id] = None
         self.main_window.thumb_layout.update_selected()
+        self.main_window.map_panel.set_selected(self.selected)
 
     def select_to_entry(self, entry_id: int):
         if len(self._selected) == 0:
@@ -1944,10 +1950,12 @@ class QtDriver(DriverMixin, QObject):
             entry_id = self.frame_content[i]
             self._selected[entry_id] = None
         self.main_window.thumb_layout.update_selected()
+        self.main_window.map_panel.set_selected(self.selected)
 
     def clear_selected(self):
         self._selected.clear()
         self.main_window.thumb_layout.update_selected()
+        self.main_window.map_panel.set_selected(self.selected)
 
     def move_grid_selection(self, direction: str, extend: bool = False) -> None:
         """Move the active selection through the entries currently shown in the grid."""
@@ -1990,3 +1998,17 @@ class QtDriver(DriverMixin, QObject):
         self.set_clipboard_menu_viability()
         self.set_select_actions_visibility()
         self.main_window.preview_panel.set_selection(self.selected)
+
+    def update_map(self) -> None:
+        """Refresh the map pane with GPS-bearing entries from the current result set."""
+        if not self.lib.library_dir:
+            self.main_window.map_panel.clear()
+            return
+
+        points: list[GeoPoint] = []
+        for entry in self.lib.get_entries_full(self.frame_content):
+            point = geo_point_for_entry(entry, self.lib.resolve_entry_path(entry))
+            if point is not None:
+                points.append(point)
+        self.main_window.map_panel.set_points(points)
+        self.main_window.map_panel.set_selected(self.selected)
