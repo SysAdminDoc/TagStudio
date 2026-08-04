@@ -105,6 +105,8 @@ With TagStudio opened, start by creating a new library or opening an existing on
 
 Libraries under 10,000 files automatically scan for new or modified files when opened. On Windows and Linux, open libraries also watch their configured roots natively, so new files and in-library moves appear without a manual rescan. To run a full refresh manually, select "Refresh Directories" under the File menu or by pressing <kbd>Ctrl</kbd></kbd>+<kbd>R</kbd> (macOS: <kbd>⌘ Command</kbd>+<kbd>R</kbd>).
 
+Use Tools -> Watch Folder Rules to apply existing tags automatically from path or filename regular expressions. Rules are stored in the library's `.TagStudio/watch_rules.json`, apply to new files and in-library moves, and are re-applied to existing entries when saved or during a manual refresh. Path expressions use relative `/` separators; filename expressions only test the final filename.
+
 Use Tools -> Find Duplicate Files to run an exact-content BLAKE3 pass. Results are grouped in a read-only view; TagStudio never deletes or merges files from this scan.
 
 Thumbnail previews use a persistent least-recently-used cache and evict older files when the size cap is reached. The global Settings panel controls the default cap; an open library's Settings -> Library Settings tab can override it for that library.

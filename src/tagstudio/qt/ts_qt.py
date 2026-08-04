@@ -61,6 +61,7 @@ from tagstudio.core.library.alchemy.library import Library, LibraryStatus
 from tagstudio.core.library.alchemy.models import Entry
 from tagstudio.core.library.ignore import Ignore
 from tagstudio.core.library.refresh import IncrementalScanner, RefreshTracker
+from tagstudio.core.library.watch_rules import WatchRuleApplyResult, WatchRuleEngine, WatchRuleSet
 from tagstudio.core.library.watcher import FileSystemEvent, LibraryWatcher
 from tagstudio.core.media_types import MediaCategories
 from tagstudio.core.plugins import PluginRegistry
@@ -96,6 +97,7 @@ from tagstudio.qt.mixed.settings_panel import SettingsPanel
 from tagstudio.qt.mixed.tag_color_manager import TagColorManager
 from tagstudio.qt.mixed.tag_database import TagDatabasePanel
 from tagstudio.qt.mixed.tag_search import TagSearchModal
+from tagstudio.qt.mixed.watch_rules import WatchRulesModal
 from tagstudio.qt.models.palette import ColorType, UiColor, get_ui_color
 from tagstudio.qt.platform_strings import trash_term
 from tagstudio.qt.previews.vendored.ffmpeg import FFMPEG_CMD, FFPROBE_CMD
@@ -197,6 +199,7 @@ class QtDriver(DriverMixin, QObject):
     ignored_modal: FixIgnoredEntriesModal
     dupe_modal: FixDupeFilesModal
     hash_duplicates_modal: HashDuplicateModal | None = None
+    watch_rules_modal: WatchRulesModal | None = None
     library_info_window: LibraryInfoWindow
 
     applied_theme: Theme
@@ -204,6 +207,7 @@ class QtDriver(DriverMixin, QObject):
     lib: Library
     cache_manager: CacheManager
     plugin_registry: PluginRegistry
+    watch_rule_engine: WatchRuleEngine | None = None
     library_watcher: LibraryWatcher | None = None
 
     browsing_history: History[BrowsingState]
@@ -583,6 +587,13 @@ class QtDriver(DriverMixin, QObject):
             create_hash_duplicates_modal
         )
 
+        def create_watch_rules_modal():
+            if self.watch_rules_modal is None:
+                self.watch_rules_modal = WatchRulesModal(self.lib, self)
+            self.watch_rules_modal.show()
+
+        self.main_window.menu_bar.watch_rules_action.triggered.connect(create_watch_rules_modal)
+
         # TODO: Move this to a settings screen.
         self.main_window.menu_bar.clear_thumb_cache_action.triggered.connect(
             lambda: self.cache_manager.clear_cache()
@@ -780,7 +791,8 @@ class QtDriver(DriverMixin, QObject):
     def _start_library_watcher(self) -> None:
         """Watch all configured roots and apply events on the Qt event loop."""
         self._stop_library_watcher()
-        self._incremental_scanner = IncrementalScanner(self.lib)
+        self.watch_rule_engine = WatchRuleEngine(self.lib)
+        self._incremental_scanner = IncrementalScanner(self.lib, self.watch_rule_engine)
         self._library_event_queue = Queue()
 
         self._library_event_timer = QTimer(self)
@@ -805,7 +817,19 @@ class QtDriver(DriverMixin, QObject):
             self._library_event_timer = None
 
         self._incremental_scanner = None
+        self.watch_rule_engine = None
         self._library_event_queue = Queue()
+
+    def save_watch_rules(self, ruleset: WatchRuleSet) -> WatchRuleApplyResult:
+        """Persist and immediately apply the current library's watch rules."""
+        if self.watch_rule_engine is None:
+            self.watch_rule_engine = WatchRuleEngine(self.lib)
+        self.watch_rule_engine.replace(ruleset, save=True)
+        if self._incremental_scanner is not None:
+            self._incremental_scanner.watch_rule_engine = self.watch_rule_engine
+        result = self.watch_rule_engine.apply_to_all()
+        self.update_browsing_state()
+        return result
 
     def _process_library_events(self) -> None:
         """Apply a bounded batch of native events without blocking the Qt event loop."""
@@ -906,6 +930,9 @@ class QtDriver(DriverMixin, QObject):
             self.main_window.menu_bar.fix_ignored_entries_action.setEnabled(False)
             self.main_window.menu_bar.fix_dupe_files_action.setEnabled(False)
             self.main_window.menu_bar.find_hash_duplicates_action.setEnabled(False)
+            watch_rules_action = getattr(self.main_window.menu_bar, "watch_rules_action", None)
+            if watch_rules_action is not None:
+                watch_rules_action.setEnabled(False)
             self.main_window.menu_bar.clear_thumb_cache_action.setEnabled(False)
             self.main_window.menu_bar.folders_to_tags_action.setEnabled(False)
             self.main_window.menu_bar.library_info_action.setEnabled(False)
@@ -1795,6 +1822,9 @@ class QtDriver(DriverMixin, QObject):
         self.main_window.menu_bar.fix_ignored_entries_action.setEnabled(True)
         self.main_window.menu_bar.fix_dupe_files_action.setEnabled(True)
         self.main_window.menu_bar.find_hash_duplicates_action.setEnabled(True)
+        watch_rules_action = getattr(self.main_window.menu_bar, "watch_rules_action", None)
+        if watch_rules_action is not None:
+            watch_rules_action.setEnabled(True)
         self.main_window.menu_bar.clear_thumb_cache_action.setEnabled(True)
         self.main_window.menu_bar.folders_to_tags_action.setEnabled(True)
         self.main_window.menu_bar.library_info_action.setEnabled(True)

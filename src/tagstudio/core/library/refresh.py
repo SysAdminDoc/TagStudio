@@ -17,6 +17,7 @@ from wcmatch import pathlib
 from tagstudio.core.library.alchemy.library import Library
 from tagstudio.core.library.alchemy.models import Entry
 from tagstudio.core.library.ignore import PATH_GLOB_FLAGS, ignore_to_glob
+from tagstudio.core.library.watch_rules import WatchRuleEngine
 from tagstudio.core.library.watcher import FileSystemEvent, FileSystemEventKind
 from tagstudio.core.utils.silent_subprocess import silent_run  # pyright: ignore
 from tagstudio.core.utils.types import unwrap
@@ -29,6 +30,10 @@ class RefreshTracker:
     library: Library
     files_not_in_library: list[Path] = field(default_factory=list)
     _pending_files: list[tuple[int, Path]] = field(default_factory=list, init=False, repr=False)
+    watch_rule_engine: WatchRuleEngine = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.watch_rule_engine = WatchRuleEngine(self.library)
 
     @property
     def files_count(self) -> int:
@@ -61,9 +66,11 @@ class RefreshTracker:
                 )
                 if auto_tag_ids:
                     self.library.add_tags_to_entries(entry_id, auto_tag_ids)
+                self.watch_rule_engine.apply_to_entry(entry_id, entry.path)
             index = end
         self._pending_files = []
         self.files_not_in_library = []
+        self.watch_rule_engine.apply_to_all()
 
     def refresh_dir(self, library_dir: Path, force_internal_tools: bool = False) -> Iterator[int]:
         """Scan a directory for files, and add those relative filenames to internal variables.
@@ -277,8 +284,9 @@ class IncrementalScanResult:
 class IncrementalScanner:
     """Apply native watcher events without walking every configured root."""
 
-    def __init__(self, library: Library) -> None:
+    def __init__(self, library: Library, watch_rule_engine: WatchRuleEngine | None = None) -> None:
         self.library = library
+        self.watch_rule_engine = watch_rule_engine or WatchRuleEngine(library)
 
     def apply(self, events: Iterable[FileSystemEvent]) -> IncrementalScanResult:
         """Apply a batch of events and return the entries that need a UI refresh."""
@@ -301,6 +309,7 @@ class IncrementalScanner:
                         added_ids.append(entry_id)
                 else:
                     self.library.included_files.add(path)
+                    self.watch_rule_engine.apply_to_entry(entry.id, entry.path)
                     updated_ids.append(entry.id)
             elif event.kind is FileSystemEventKind.DELETED:
                 self.library.included_files.discard(path)
@@ -365,6 +374,7 @@ class IncrementalScanner:
         auto_tag_ids = self.library.auto_tag_ids_for_path(relative_path, folder=folder.id)
         if auto_tag_ids:
             self.library.add_tags_to_entries(entry_id, auto_tag_ids)
+        self.watch_rule_engine.apply_to_entry(entry_id, relative_path)
         self.library.included_files.add(path)
         return entry_id
 
@@ -377,8 +387,12 @@ class IncrementalScanner:
         folder = self.library.get_folder_by_path(root)
         if folder is None:
             return False
-        return self.library.move_entry(
+        relative_path = self.library.relative_path(path)
+        moved = self.library.move_entry(
             entry_id,
-            self.library.relative_path(path),
+            relative_path,
             folder=folder.id,
         )
+        if moved:
+            self.watch_rule_engine.apply_to_entry(entry_id, relative_path)
+        return moved
