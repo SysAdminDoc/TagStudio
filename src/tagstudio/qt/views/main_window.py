@@ -11,8 +11,11 @@ import structlog
 from PIL import Image, ImageQt
 from PySide6 import QtCore
 from PySide6.QtCore import QMetaObject, QSize, QStringListModel, Qt
-from PySide6.QtGui import QAction, QColor, QPixmap
+from PySide6.QtGui import QAction, QColor, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QAbstractSpinBox,
+    QApplication,
     QCheckBox,
     QComboBox,
     QCompleter,
@@ -26,12 +29,14 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMenuBar,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QSpacerItem,
     QSplitter,
     QStatusBar,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -84,6 +89,7 @@ class MainMenuBar(QMenuBar):
 
     view_menu: QMenu
     show_filenames_action: QAction
+    compact_layout_action: QAction
 
     tools_menu: QMenu
     fix_unlinked_entries_action: QAction
@@ -327,6 +333,20 @@ class MainMenuBar(QMenuBar):
         self.show_filenames_action.setCheckable(True)
         self.view_menu.addAction(self.show_filenames_action)
 
+        self.compact_layout_action = QAction(Translations["settings.compact_layout"], self)
+        self.compact_layout_action.setCheckable(True)
+        self.compact_layout_action.setShortcut(
+            QtCore.QKeyCombination(
+                QtCore.Qt.KeyboardModifier(
+                    QtCore.Qt.KeyboardModifier.ControlModifier
+                    | QtCore.Qt.KeyboardModifier.ShiftModifier
+                ),
+                QtCore.Qt.Key.Key_D,
+            )
+        )
+        self.compact_layout_action.setStatusTip("Ctrl+Shift+D")
+        self.view_menu.addAction(self.compact_layout_action)
+
         self.view_menu.addSeparator()
 
         self.increase_thumbnail_size_action = QAction(
@@ -532,6 +552,7 @@ class MainWindow(QMainWindow):
         self.setup_menu_bar()
 
         self.setup_central_widget(driver)
+        self.setup_keyboard_navigation(driver)
 
         self.setup_status_bar()
 
@@ -777,7 +798,7 @@ class MainWindow(QMainWindow):
         self.thumb_grid = QWidget()
         self.thumb_grid.setObjectName("thumb_grid")
         self.thumb_layout = ThumbGridLayout(driver, self.entry_scroll_area)
-        self.thumb_layout.setSpacing(min(self.thumb_size // 10, 12))
+        self.thumb_layout.set_dense(driver.settings.dense_layout)
         self.thumb_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.thumb_grid.setLayout(self.thumb_layout)
         self.entry_scroll_area.setWidget(self.thumb_grid)
@@ -807,6 +828,55 @@ class MainWindow(QMainWindow):
         self.status_bar.setSizePolicy(status_bar_size_policy)
         self.status_bar.setSizeGripEnabled(False)
         self.setStatusBar(self.status_bar)
+
+    def setup_keyboard_navigation(self, driver: "QtDriver") -> None:
+        """Install pointer-free shortcuts for navigating the thumbnail grid."""
+        self._grid_navigation_shortcuts: list[QShortcut] = []
+
+        bindings = (
+            (Qt.Key.Key_Left, "left"),
+            (Qt.Key.Key_Right, "right"),
+            (Qt.Key.Key_Up, "up"),
+            (Qt.Key.Key_Down, "down"),
+            (Qt.Key.Key_Home, "home"),
+            (Qt.Key.Key_End, "end"),
+        )
+        for key, direction in bindings:
+            for extend in (False, True):
+                combination = (
+                    QtCore.QKeyCombination(Qt.KeyboardModifier.ShiftModifier, key)
+                    if extend
+                    else key
+                )
+                shortcut = QShortcut(QKeySequence(combination), self)
+                shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+                shortcut.activated.connect(
+                    lambda direction=direction, extend=extend: self._navigate_grid(
+                        driver, direction, extend
+                    )
+                )
+                self._grid_navigation_shortcuts.append(shortcut)
+
+    def _navigate_grid(self, driver: "QtDriver", direction: str, extend: bool) -> None:
+        focus = QApplication.focusWidget()
+        if focus is not None:
+            widget = focus
+            while widget is not None:
+                if widget in (self.thumb_grid, self.entry_scroll_area):
+                    break
+                widget = widget.parentWidget()
+            else:
+                if isinstance(
+                    focus,
+                    QAbstractItemView
+                    | QAbstractSpinBox
+                    | QComboBox
+                    | QLineEdit
+                    | QPlainTextEdit
+                    | QTextEdit,
+                ):
+                    return
+        driver.move_grid_selection(direction, extend)
 
     # endregion
 

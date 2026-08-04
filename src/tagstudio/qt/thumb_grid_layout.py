@@ -19,6 +19,9 @@ if TYPE_CHECKING:
 
 
 class ThumbGridLayout(QLayout):
+    DENSE_SPACING = 4
+    DEFAULT_THUMB_SIZE = 128
+
     # Id of first visible entry
     visible_changed = Signal(int)
 
@@ -47,6 +50,32 @@ class ThumbGridLayout(QLayout):
         self._last_page_update: tuple[int, int] | None = None
 
         self._scroll_to: int | None = None
+        self._dense = False
+
+    @property
+    def dense(self) -> bool:
+        return self._dense
+
+    def set_dense(self, dense: bool) -> None:
+        """Set the compact grid spacing and invalidate the current geometry."""
+        self._dense = dense
+        thumb_size = getattr(getattr(self.driver, "main_window", None), "thumb_size", None)
+        if thumb_size is None:
+            thumb_size = self.DEFAULT_THUMB_SIZE
+        spacing = self.DENSE_SPACING if dense else min(thumb_size // 10, 12)
+        self.setSpacing(spacing)
+        self.invalidate()
+        if parent := self.parentWidget():
+            parent.updateGeometry()
+            parent.update()
+        self.scroll_area.viewport().update()
+
+    def column_count(self) -> int:
+        """Return the number of thumbnails that fit across the current viewport."""
+        if not self._entry_ids:
+            return 1
+        per_row, _, _ = self._size(max(1, self.scroll_area.viewport().width()))
+        return max(1, per_row)
 
     def scroll_to(self, entry_id: int):
         self._scroll_to = entry_id

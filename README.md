@@ -113,6 +113,8 @@ Use Tools -> Export Read-only Mirror to copy indexed files and standard XMP tag 
 
 The `tagstudio` command also supports headless scripting: `tagstudio query LIBRARY QUERY` emits JSON entry records, `tagstudio tag LIBRARY TAG --path FILE` adds or removes tags, and `tagstudio export LIBRARY DESTINATION --target immich|photoprism|nextcloud` creates the same read-only mirror. Use `--format jsonl` or `--format paths` with `query` for pipeline-friendly output; diagnostics are written to stderr.
 
+Use View -> Compact / Dense Layout (or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd>) to fit more thumbnails across the grid. With the grid active, the arrow keys move the selection by item or row, <kbd>Home</kbd>/<kbd>End</kbd> jump to the first or last item, and holding <kbd>Shift</kbd> extends the selection.
+
 Use Tools -> Find Duplicate Files to run an exact-content BLAKE3 pass. Results are grouped in a read-only view; TagStudio never deletes or merges files from this scan.
 
 Thumbnail previews use a persistent least-recently-used cache and evict older files when the size cap is reached. The global Settings panel controls the default cap; an open library's Settings -> Library Settings tab can override it for that library.

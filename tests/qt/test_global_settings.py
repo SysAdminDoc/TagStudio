@@ -16,6 +16,7 @@ def test_read_settings(library_dir: Path):
             open_last_loaded_on_startup = true
             autoplay = true
             show_filenames_in_grid = true
+            dense_layout = true
             page_size = 1337
             show_filepath = 0
             dark_mode = 2
@@ -29,6 +30,7 @@ def test_read_settings(library_dir: Path):
     assert settings.open_last_loaded_on_startup
     assert settings.autoplay
     assert settings.show_filenames_in_grid
+    assert settings.dense_layout
     assert settings.page_size == 1337
     assert settings.show_filepath == 0
     assert settings.theme == Theme.SYSTEM

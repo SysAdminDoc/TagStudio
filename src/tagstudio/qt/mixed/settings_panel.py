@@ -189,6 +189,11 @@ class SettingsPanel(PanelWidget):
             Translations["settings.show_filenames_in_grid"], self.show_filenames_checkbox
         )
 
+        # Compact / Dense Grid Layout
+        self.dense_layout_checkbox = QCheckBox()
+        self.dense_layout_checkbox.setChecked(self.driver.settings.dense_layout)
+        form_layout.addRow(Translations["settings.compact_layout"], self.dense_layout_checkbox)
+
         # Infinite Scrolling
         self.infinite_scroll = QCheckBox()
         self.infinite_scroll.setChecked(self.driver.settings.infinite_scroll)
@@ -320,6 +325,7 @@ class SettingsPanel(PanelWidget):
             ),
             "autoplay": self.autoplay_checkbox.isChecked(),
             "show_filenames_in_grid": self.show_filenames_checkbox.isChecked(),
+            "dense_layout": self.dense_layout_checkbox.isChecked(),
             "page_size": int(self.page_size_line_edit.text()),
             "infinite_scroll": self.infinite_scroll.isChecked(),
             "show_filepath": self.filepath_combobox.currentData(),
@@ -350,6 +356,7 @@ class SettingsPanel(PanelWidget):
             if cache_manager is not None:
                 cache_manager.set_max_size_mib(settings["library_thumb_cache_size"])
         driver.settings.show_filenames_in_grid = settings["show_filenames_in_grid"]
+        driver.settings.dense_layout = settings["dense_layout"]
         driver.settings.page_size = settings["page_size"]
         driver.settings.infinite_scroll = settings["infinite_scroll"]
         driver.settings.show_filepath = settings["show_filepath"]
@@ -361,6 +368,9 @@ class SettingsPanel(PanelWidget):
         driver.settings.splash = settings["splash"]
 
         driver.settings.save()
+
+        driver.main_window.thumb_layout.set_dense(driver.settings.dense_layout)
+        driver.main_window.menu_bar.compact_layout_action.setChecked(driver.settings.dense_layout)
 
         # Apply changes
         # Show File Path

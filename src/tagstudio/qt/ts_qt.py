@@ -535,6 +535,14 @@ class QtDriver(DriverMixin, QObject):
             self.settings.show_filenames_in_grid
         )
 
+        def on_compact_layout_action(checked: bool):
+            self.settings.dense_layout = checked
+            self.settings.save()
+            self.main_window.thumb_layout.set_dense(checked)
+
+        self.main_window.menu_bar.compact_layout_action.triggered.connect(on_compact_layout_action)
+        self.main_window.menu_bar.compact_layout_action.setChecked(self.settings.dense_layout)
+
         def on_decrease_thumbnail_size_action():
             new_val = self.main_window.thumb_size_combobox.currentIndex() + 1
             if not (new_val + 1) > len(self.main_window.THUMB_SIZES):
@@ -1343,9 +1351,6 @@ class QtDriver(DriverMixin, QObject):
 
     def thumb_size_callback(self, size: int):
         """Perform actions needed when the thumbnail size selection is changed."""
-        spacing_divisor: int = 10
-        min_spacing: int = 12
-
         self.update_thumbs()
         blank_icon: QIcon = QIcon()
         for it in self.main_window.thumb_layout._item_thumbs:
@@ -1355,9 +1360,7 @@ class QtDriver(DriverMixin, QObject):
             it.setFixedSize(self.main_window.thumb_size, self.main_window.thumb_size)
             it.thumb_button.thumb_size = (self.main_window.thumb_size, self.main_window.thumb_size)
             it.set_filename_visibility(it.show_filename_label)
-        self.main_window.thumb_layout.setSpacing(
-            min(self.main_window.thumb_size // spacing_divisor, min_spacing)
-        )
+        self.main_window.thumb_layout.set_dense(self.main_window.thumb_layout.dense)
 
     def show_hidden_entries_callback(self):
         logger.info("Show Hidden Entries Changed", exclude=self.main_window.show_hidden_entries)
@@ -1945,3 +1948,45 @@ class QtDriver(DriverMixin, QObject):
     def clear_selected(self):
         self._selected.clear()
         self.main_window.thumb_layout.update_selected()
+
+    def move_grid_selection(self, direction: str, extend: bool = False) -> None:
+        """Move the active selection through the entries currently shown in the grid."""
+        entry_ids = self.main_window.thumb_layout._entry_ids
+        if not entry_ids:
+            return
+
+        current = self.last_selected
+        if current is None:
+            target_index = len(entry_ids) - 1 if direction == "end" else 0
+        else:
+            current_index = entry_ids.index(current) if current in entry_ids else 0
+            if direction == "left":
+                target_index = max(0, current_index - 1)
+            elif direction == "right":
+                target_index = min(len(entry_ids) - 1, current_index + 1)
+            elif direction == "up":
+                target_index = max(0, current_index - self.main_window.thumb_layout.column_count())
+            elif direction == "down":
+                target_index = min(
+                    len(entry_ids) - 1,
+                    current_index + self.main_window.thumb_layout.column_count(),
+                )
+            elif direction == "home":
+                target_index = 0
+            elif direction == "end":
+                target_index = len(entry_ids) - 1
+            else:
+                raise ValueError(f"Unknown grid navigation direction: {direction}")
+
+        target_id = entry_ids[target_index]
+        if extend and self.last_selected in self.frame_content:
+            self.select_to_entry(target_id)
+        else:
+            self.clear_selected()
+            self.select_entry(target_id)
+
+        self.main_window.thumb_layout.scroll_to(target_id)
+        self.main_window.thumb_layout.update()
+        self.set_clipboard_menu_viability()
+        self.set_select_actions_visibility()
+        self.main_window.preview_panel.set_selection(self.selected)

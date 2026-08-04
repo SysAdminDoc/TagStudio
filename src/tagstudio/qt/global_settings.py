@@ -65,6 +65,7 @@ class GlobalSettings(BaseModel):
     autoplay: bool = Field(default=True)
     loop: bool = Field(default=True)
     show_filenames_in_grid: bool = Field(default=True)
+    dense_layout: bool = Field(default=False)
     page_size: int = Field(default=100)
     infinite_scroll: bool = Field(default=True)
     show_filepath: ShowFilepathOption = Field(default=ShowFilepathOption.DEFAULT)

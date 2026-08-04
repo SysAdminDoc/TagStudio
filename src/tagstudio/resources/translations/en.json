@@ -276,6 +276,7 @@
     "select.clear": "Clear Selection",
     "select.inverse": "Invert Selection",
     "settings.clear_thumb_cache.title": "Clear Thumbnail Cache",
+    "settings.compact_layout": "Compact / Dense Layout",
     "settings.dateformat.english": "English",
     "settings.dateformat.international": "International",
     "settings.dateformat.label": "Date Format",
