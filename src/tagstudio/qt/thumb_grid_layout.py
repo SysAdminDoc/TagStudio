@@ -126,6 +126,28 @@ class ThumbGridLayout(QLayout):
         entry_id = self._entry_paths[file_path]
         self._update_thumb(entry_id, image, size, file_path)
 
+    def _retain_window_cache(self, entry_ids: set[int]) -> None:
+        """Keep only the active overscan window in memory for infinite-scroll grids."""
+        self._entries = {
+            entry_id: entry for entry_id, entry in self._entries.items() if entry_id in entry_ids
+        }
+        self._entry_paths = {
+            path: entry_id
+            for path, entry_id in self._entry_paths.items()
+            if entry_id in entry_ids
+        }
+        for tag_id, tagged_entry_ids in self._tag_entries.items():
+            self._tag_entries[tag_id] = tagged_entry_ids.intersection(entry_ids)
+
+        loading_result = self._render_results.get(Path())
+        self._render_results = {
+            path: result
+            for path, result in self._render_results.items()
+            if path == Path() or path in self._entry_paths
+        }
+        if loading_result is not None:
+            self._render_results[Path()] = loading_result
+
     def _update_thumb(self, entry_id: int, image: QPixmap, size: QSize, file_path: Path):
         index = self._entry_items.get(entry_id)
         if index is None:
@@ -221,6 +243,7 @@ class ThumbGridLayout(QLayout):
         if (start, end) == self._last_page_update:
             return
         self._last_page_update = (start, end)
+        self._retain_window_cache(set(self._entry_ids[start:end]))
 
         # Clear render queue if len > 2 pages
         if len(self.driver.thumb_job_queue.queue) > (per_row * visible_rows * 2):
