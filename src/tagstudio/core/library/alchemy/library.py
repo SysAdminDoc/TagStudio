@@ -928,6 +928,20 @@ class Library:
                 folder.path = self.__resolve_folder_path(folder.path)
             return folder
 
+    def get_folder_by_path(self, root: Path) -> Folder | None:
+        """Load a configured root by its canonical filesystem path."""
+        if self.engine is None:
+            return None
+        canonical_root = self.__canonical_root(root)
+        with Session(self.engine, expire_on_commit=False) as session:
+            for folder in session.scalars(select(Folder).order_by(Folder.id)):
+                if self.__resolve_folder_path(folder.path) != canonical_root:
+                    continue
+                session.expunge(folder)
+                folder.path = canonical_root
+                return folder
+        return None
+
     def resolve_entry_path(self, entry: Entry) -> Path:
         """Resolve an entry's relative path against the root that owns it."""
         try:
@@ -2042,6 +2056,53 @@ class Library:
             session.execute(update_stmt)
             session.commit()
         return True
+
+    def move_entry(
+        self,
+        entry_id: int,
+        path: Path,
+        folder: Folder | Path | int,
+    ) -> bool:
+        """Move an entry to a path and root while retaining its tags and fields.
+
+        This is used by the incremental file watcher for in-library renames and moves.  The
+        operation is rejected when another entry already occupies the destination.
+        """
+        with Session(self.engine) as session:
+            folder_id = self.__folder_id(session, folder)
+            if session.scalar(
+                select(
+                    exists().where(
+                        and_(
+                            Entry.folder_id == folder_id,
+                            Entry.path == path,
+                            Entry.id != entry_id,
+                        )
+                    )
+                )
+            ):
+                return False
+
+            update_stmt = (
+                update(Entry)
+                .where(Entry.id == entry_id)
+                .values(
+                    folder_id=folder_id,
+                    path=path,
+                    filename=path.name,
+                    suffix=path.suffix.lstrip(".").lower(),
+                )
+            )
+            session.execute(update_stmt)
+            updated = session.scalar(
+                select(
+                    exists().where(
+                        and_(Entry.id == entry_id, Entry.folder_id == folder_id)
+                    )
+                )
+            )
+            session.commit()
+        return bool(updated)
 
     def remove_tag(self, tag_id: int) -> bool:
         with Session(self.engine, expire_on_commit=False) as session:

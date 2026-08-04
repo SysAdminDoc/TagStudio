@@ -18,7 +18,7 @@ import time
 from argparse import Namespace
 from collections import OrderedDict
 from pathlib import Path
-from queue import Queue
+from queue import Empty, Queue
 from shutil import which
 from typing import Generic, TypeVar
 from warnings import catch_warnings
@@ -60,7 +60,8 @@ from tagstudio.core.library.alchemy.fields import FieldID
 from tagstudio.core.library.alchemy.library import Library, LibraryStatus
 from tagstudio.core.library.alchemy.models import Entry
 from tagstudio.core.library.ignore import Ignore
-from tagstudio.core.library.refresh import RefreshTracker
+from tagstudio.core.library.refresh import IncrementalScanner, RefreshTracker
+from tagstudio.core.library.watcher import FileSystemEvent, LibraryWatcher
 from tagstudio.core.media_types import MediaCategories
 from tagstudio.core.query_lang.completions import query_completions
 from tagstudio.core.query_lang.util import ParsingError
@@ -199,6 +200,7 @@ class QtDriver(DriverMixin, QObject):
 
     lib: Library
     cache_manager: CacheManager
+    library_watcher: LibraryWatcher | None = None
 
     browsing_history: History[BrowsingState]
 
@@ -222,6 +224,9 @@ class QtDriver(DriverMixin, QObject):
         # self.buffer = {}
         self.thumb_job_queue: Queue = Queue()
         self.thumb_threads: list[Consumer] = []
+        self._library_event_queue: Queue[FileSystemEvent] = Queue()
+        self._library_event_timer: QTimer | None = None
+        self._incremental_scanner: IncrementalScanner | None = None
 
         self.SIGTERM.connect(self.handle_sigterm)
 
@@ -308,6 +313,7 @@ class QtDriver(DriverMixin, QObject):
             return
 
         self.lib.add_root(Path(directory))
+        self._start_library_watcher()
         self.add_new_files_callback()
 
     def signal_handler(self, sig, frame):
@@ -756,6 +762,59 @@ class QtDriver(DriverMixin, QObject):
         if self.lib.library_dir:
             func()
 
+    def _start_library_watcher(self) -> None:
+        """Watch all configured roots and apply events on the Qt event loop."""
+        self._stop_library_watcher()
+        self._incremental_scanner = IncrementalScanner(self.lib)
+        self._library_event_queue = Queue()
+
+        self._library_event_timer = QTimer(self)
+        self._library_event_timer.setInterval(250)
+        self._library_event_timer.timeout.connect(self._process_library_events)
+        self._library_event_timer.start()
+
+        self.library_watcher = LibraryWatcher(self.lib.roots, self._library_event_queue.put)
+        self.library_watcher.start()
+        if not self.library_watcher.supported:
+            logger.info("[LibraryWatcher] Native backend unavailable")
+
+    def _stop_library_watcher(self) -> None:
+        """Stop native watchers before closing or replacing the database."""
+        if self.library_watcher is not None:
+            watcher, self.library_watcher = self.library_watcher, None
+            watcher.stop()
+
+        if self._library_event_timer is not None:
+            self._library_event_timer.stop()
+            self._library_event_timer.deleteLater()
+            self._library_event_timer = None
+
+        self._incremental_scanner = None
+        self._library_event_queue = Queue()
+
+    def _process_library_events(self) -> None:
+        """Apply a bounded batch of native events without blocking the Qt event loop."""
+        if self._incremental_scanner is None:
+            return
+
+        events: list[FileSystemEvent] = []
+        while len(events) < 2048:
+            try:
+                events.append(self._library_event_queue.get_nowait())
+            except Empty:
+                break
+        if not events:
+            return
+
+        try:
+            result = self._incremental_scanner.apply(events)
+        except Exception:
+            logger.exception("[LibraryWatcher] Failed to apply file-system events")
+            return
+
+        if result.changed_ids:
+            self.update_browsing_state()
+
     def handle_sigterm(self):
         self.shutdown()
 
@@ -779,6 +838,7 @@ class QtDriver(DriverMixin, QObject):
             return
 
         logger.info("Closing Library...")
+        self._stop_library_watcher()
         self.main_window.status_bar.showMessage(Translations["status.library_closing"])
         start_time = time.time()
 
@@ -1687,6 +1747,7 @@ class QtDriver(DriverMixin, QObject):
         # TODO - make this call optional
         if self.lib.entries_count < 10000:
             self.add_new_files_callback()
+        self._start_library_watcher()
 
         if self.settings.show_filepath == ShowFilepathOption.SHOW_FULL_PATHS:
             library_dir_display = self.lib.library_dir

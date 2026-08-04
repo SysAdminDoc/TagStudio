@@ -99,7 +99,7 @@ With TagStudio opened, start by creating a new library or opening an existing on
 
 ### Refreshing the Library
 
-Libraries under 10,000 files automatically scan for new or modified files when opened. In order to refresh the library manually, select "Refresh Directories" under the File menu or by pressing <kbd>Ctrl</kbd></kbd>+<kbd>R</kbd> (macOS: <kbd>⌘ Command</kbd>+<kbd>R</kbd>).
+Libraries under 10,000 files automatically scan for new or modified files when opened. On Windows and Linux, open libraries also watch their configured roots natively, so new files and in-library moves appear without a manual rescan. To run a full refresh manually, select "Refresh Directories" under the File menu or by pressing <kbd>Ctrl</kbd></kbd>+<kbd>R</kbd> (macOS: <kbd>⌘ Command</kbd>+<kbd>R</kbd>).
 
 ### Creating Tags
 

@@ -17,6 +17,7 @@ from wcmatch import pathlib
 from tagstudio.core.library.alchemy.library import Library
 from tagstudio.core.library.alchemy.models import Entry
 from tagstudio.core.library.ignore import PATH_GLOB_FLAGS, ignore_to_glob
+from tagstudio.core.library.watcher import FileSystemEvent, FileSystemEventKind
 from tagstudio.core.utils.silent_subprocess import silent_run  # pyright: ignore
 from tagstudio.core.utils.types import unwrap
 
@@ -251,4 +252,133 @@ class RefreshTracker:
             duration=(end_time_total - start_time_total),
             files_scanned=dir_file_count,
             tool_used="wcmatch (internal)",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class IncrementalScanResult:
+    """IDs affected by one batch of native file-system events."""
+
+    added_ids: tuple[int, ...] = ()
+    updated_ids: tuple[int, ...] = ()
+    moved_ids: tuple[int, ...] = ()
+    deleted_ids: tuple[int, ...] = ()
+
+    @property
+    def changed_ids(self) -> tuple[int, ...]:
+        """Return affected IDs in stable, duplicate-free order."""
+        return tuple(
+            dict.fromkeys(
+                (*self.added_ids, *self.updated_ids, *self.moved_ids, *self.deleted_ids)
+            )
+        )
+
+
+class IncrementalScanner:
+    """Apply native watcher events without walking every configured root."""
+
+    def __init__(self, library: Library) -> None:
+        self.library = library
+
+    def apply(self, events: Iterable[FileSystemEvent]) -> IncrementalScanResult:
+        """Apply a batch of events and return the entries that need a UI refresh."""
+        added_ids: list[int] = []
+        updated_ids: list[int] = []
+        moved_ids: list[int] = []
+        deleted_ids: list[int] = []
+
+        for event in events:
+            path = Path(event.path).resolve(strict=False)
+            if event.kind is FileSystemEventKind.CREATED:
+                entry_id = self._add_path(path)
+                if entry_id is not None:
+                    added_ids.append(entry_id)
+            elif event.kind is FileSystemEventKind.MODIFIED:
+                entry = self.library.get_entry_full_by_file_path(path)
+                if entry is None:
+                    entry_id = self._add_path(path)
+                    if entry_id is not None:
+                        added_ids.append(entry_id)
+                else:
+                    self.library.included_files.add(path)
+                    updated_ids.append(entry.id)
+            elif event.kind is FileSystemEventKind.DELETED:
+                self.library.included_files.discard(path)
+                entry = self.library.get_entry_full_by_file_path(path)
+                if entry is not None:
+                    deleted_ids.append(entry.id)
+            elif event.kind is FileSystemEventKind.MOVED:
+                old_path = (
+                    Path(event.old_path).resolve(strict=False)
+                    if event.old_path is not None
+                    else None
+                )
+                if old_path is not None:
+                    entry = self.library.get_entry_full_by_file_path(old_path)
+                else:
+                    entry = None
+
+                if entry is not None and self._move_entry(entry.id, path):
+                    self.library.included_files.discard(old_path)
+                    self.library.included_files.add(path)
+                    moved_ids.append(entry.id)
+                else:
+                    entry_id = self._add_path(path)
+                    if entry_id is not None:
+                        added_ids.append(entry_id)
+
+        return IncrementalScanResult(
+            added_ids=tuple(dict.fromkeys(added_ids)),
+            updated_ids=tuple(dict.fromkeys(updated_ids)),
+            moved_ids=tuple(dict.fromkeys(moved_ids)),
+            deleted_ids=tuple(dict.fromkeys(deleted_ids)),
+        )
+
+    def _add_path(self, path: Path) -> int | None:
+        if not path.is_file() or self.library.is_path_ignored(path):
+            return None
+
+        root = self.library.root_for_path(path)
+        if root is None:
+            return None
+        folder = self.library.get_folder_by_path(root)
+        if folder is None:
+            return None
+
+        relative_path = self.library.relative_path(path)
+        existing = self.library.get_entry_full_by_path(relative_path, folder=folder.id)
+        if existing is not None:
+            self.library.included_files.add(path)
+            return None
+
+        entry = Entry(
+            path=relative_path,
+            folder_id=folder.id,
+            fields=self.library.default_fields_for_path(relative_path, folder=folder.id),
+            date_added=dt.now(),
+        )
+        new_ids = self.library.add_entries([entry])
+        if not new_ids:
+            return None
+
+        entry_id = new_ids[0]
+        auto_tag_ids = self.library.auto_tag_ids_for_path(relative_path, folder=folder.id)
+        if auto_tag_ids:
+            self.library.add_tags_to_entries(entry_id, auto_tag_ids)
+        self.library.included_files.add(path)
+        return entry_id
+
+    def _move_entry(self, entry_id: int, path: Path) -> bool:
+        if not path.is_file() or self.library.is_path_ignored(path):
+            return False
+        root = self.library.root_for_path(path)
+        if root is None:
+            return False
+        folder = self.library.get_folder_by_path(root)
+        if folder is None:
+            return False
+        return self.library.move_entry(
+            entry_id,
+            self.library.relative_path(path),
+            folder=folder.id,
         )
