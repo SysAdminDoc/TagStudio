@@ -46,6 +46,7 @@ from tagstudio.core.enums import ShowFilepathOption
 from tagstudio.core.library.alchemy.enums import SortingModeEnum, TagColorEnum
 from tagstudio.qt.controllers.preview_panel_controller import PreviewPanel
 from tagstudio.qt.helpers.color_overlay import theme_fg_overlay
+from tagstudio.qt.mixed.facets_pane import FacetsPane
 from tagstudio.qt.mixed.landing import LandingWidget
 from tagstudio.qt.mixed.map_pane import MapPane
 from tagstudio.qt.mixed.pagination import Pagination
@@ -95,6 +96,7 @@ class MainMenuBar(QMenuBar):
     compact_layout_action: QAction
     map_view_action: QAction
     timeline_view_action: QAction
+    facets_view_action: QAction
     location_view_action_group: QActionGroup
 
     tools_menu: QMenu
@@ -361,10 +363,15 @@ class MainMenuBar(QMenuBar):
         self.timeline_view_action.setCheckable(True)
         self.view_menu.addAction(self.timeline_view_action)
 
+        self.facets_view_action = QAction(Translations["menu.view.facets"], self)
+        self.facets_view_action.setCheckable(True)
+        self.view_menu.addAction(self.facets_view_action)
+
         self.location_view_action_group = QActionGroup(self)
         self.location_view_action_group.setExclusive(True)
         self.location_view_action_group.addAction(self.map_view_action)
         self.location_view_action_group.addAction(self.timeline_view_action)
+        self.location_view_action_group.addAction(self.facets_view_action)
         self.map_view_action.setChecked(True)
 
         self.view_menu.addSeparator()
@@ -566,6 +573,7 @@ class MainWindow(QMainWindow):
         # initialized in setup_location_panel
         self.map_panel: MapPane
         self.timeline_panel: TimelinePane
+        self.facets_panel: FacetsPane
         self.location_stack: QStackedWidget
         # endregion
 
@@ -847,8 +855,10 @@ class MainWindow(QMainWindow):
         self.location_stack.setObjectName("location_stack")
         self.map_panel = MapPane()
         self.timeline_panel = TimelinePane()
+        self.facets_panel = FacetsPane()
         self.location_stack.addWidget(self.map_panel)
         self.location_stack.addWidget(self.timeline_panel)
+        self.location_stack.addWidget(self.facets_panel)
         self.content_splitter.addWidget(self.location_stack)
 
     def setup_status_bar(self):

@@ -26,6 +26,9 @@ def _write_exif_image(path: Path, *, latitude_ref: str = "N") -> None:
         TiffImagePlugin.IFDRational(0, 1),
         TiffImagePlugin.IFDRational(0, 1),
     )
+    exif[0x0110] = "Canon EOS R5"
+    exif[0x920A] = TiffImagePlugin.IFDRational(35, 1)
+    exif[0x4746] = 4
     exif[0x9003] = "2024:01:02 03:04:05"
     image.save(path, exif=exif)
 
@@ -38,6 +41,9 @@ def test_read_exif_metadata_converts_gps_and_preserves_capture_time(tmp_path: Pa
 
     assert metadata.location == (40.5, -74.0)
     assert metadata.date_time_original == "2024:01:02 03:04:05"
+    assert metadata.camera_model == "Canon EOS R5"
+    assert metadata.focal_length_mm == 35.0
+    assert metadata.rating == 4.0
 
 
 def test_read_exif_metadata_applies_southern_latitude(tmp_path: Path):

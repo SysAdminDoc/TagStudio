@@ -193,18 +193,25 @@ class TagStudioCore:
 
     @staticmethod
     @lru_cache(maxsize=1)
-    def get_most_recent_release_version() -> str:
-        """Get the version of the most recent Github release."""
-        resp = requests.get("https://api.github.com/repos/TagStudioDev/TagStudio/releases/latest")
-        assert resp.status_code == 200, "Could not fetch information on latest release."
+    def get_most_recent_release_version() -> str | None:
+        """Get the latest release version when the optional network check succeeds."""
+        try:
+            resp = requests.get(
+                "https://api.github.com/repos/TagStudioDev/TagStudio/releases/latest",
+                timeout=3,
+            )
+            if resp.status_code != 200:
+                raise ValueError(f"unexpected HTTP status {resp.status_code}")
 
-        data = resp.json()
-        tag: str = data["tag_name"]
-        assert tag.startswith("v")
+            data = resp.json()
+            tag = data["tag_name"]
+            if not isinstance(tag, str) or not tag.startswith("v"):
+                raise ValueError("release tag is not a version tag")
 
-        version = tag[1:]
-        # the assert does not allow for prerelease/build,
-        # because the latest release should never have them
-        assert re.match(r"^\d+\.\d+\.\d+$", version) is not None, "Invalid version format."
-
-        return version
+            version = tag[1:]
+            if re.match(r"^\d+\.\d+\.\d+$", version) is None:
+                raise ValueError("release tag has an invalid version format")
+            return version
+        except (requests.RequestException, KeyError, TypeError, ValueError) as error:
+            logger.warning("Could not fetch latest release version", error=str(error))
+            return None

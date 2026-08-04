@@ -19,16 +19,23 @@ GPS_LATITUDE_REF = 1
 GPS_LATITUDE = 2
 GPS_LONGITUDE_REF = 3
 GPS_LONGITUDE = 4
+CAMERA_MODEL = 0x0110
+FOCAL_LENGTH = 0x920A
+RATING = 0x4746
+RATING_PERCENT = 0x4749
 DATE_TIME_ORIGINAL = 0x9003
 DEFAULT_GEO_COLOR = "#4f7cff"
 
 
 @dataclass(frozen=True, slots=True)
 class ExifMetadata:
-    """The EXIF values needed by map and timeline views."""
+    """The EXIF values needed by map, timeline, and facet views."""
 
     location: tuple[float, float] | None = None
     date_time_original: str | None = None
+    camera_model: str | None = None
+    focal_length_mm: float | None = None
+    rating: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +88,15 @@ def _reference(value: object) -> str:
     return str(value).strip().upper()
 
 
+def _text(value: object) -> str | None:
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="ignore")
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
 def _location_from_gps(gps: object) -> tuple[float, float] | None:
     if not isinstance(gps, dict):
         return None
@@ -120,7 +136,18 @@ def read_exif_metadata(path: Path) -> ExifMetadata:
                 date_time_original = date_time_original.decode("ascii", errors="ignore")
             if not isinstance(date_time_original, str):
                 date_time_original = None
-            return ExifMetadata(_location_from_gps(gps), date_time_original)
+            rating = _as_float(exif.get(RATING))
+            if rating is None:
+                rating_percent = _as_float(exif.get(RATING_PERCENT))
+                if rating_percent is not None:
+                    rating = round(rating_percent / 20, 2)
+            return ExifMetadata(
+                location=_location_from_gps(gps),
+                date_time_original=date_time_original,
+                camera_model=_text(exif.get(CAMERA_MODEL)),
+                focal_length_mm=_as_float(exif.get(FOCAL_LENGTH)),
+                rating=rating,
+            )
     except (OSError, ValueError):
         return ExifMetadata()
 

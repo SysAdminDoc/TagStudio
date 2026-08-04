@@ -108,7 +108,7 @@ class AboutModal(QWidget):
         version_title = QLabel("Version")
         most_recent_release = TagStudioCore.get_most_recent_release_version()
         version_content_style = self.form_content_style
-        if most_recent_release == VERSION:
+        if most_recent_release is None or most_recent_release == VERSION:
             version_content = QLabel(f"{VERSION}")
         else:
             version_content = QLabel(f"{VERSION} (Latest Release: {most_recent_release})")
