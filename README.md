@@ -77,6 +77,11 @@ Field types currently include:
 -   **Text Boxes**: Multi-line pieces of text.
 -   **Datetimes**: Dates and times.
 
+Optional local metadata workers can write OCR text to the Description field and cluster detected
+faces into tags. Face clustering uses the bundled OpenCV path; OCR uses a local Tesseract
+executable on `PATH` (or a caller-supplied local extractor). These workers are opt-in and do not
+send library data to an online service.
+
 ### [Search](https://docs.tagstud.io/search)
 
 -   Search for file entries based on tags, file path (`path:`), file types (`filetype:`), and even media types! (`mediatype:`). Path searches currently use [glob](<https://en.wikipedia.org/wiki/Glob_(programming)>) syntax, so you may need to wrap your filename or filepath in asterisks while searching. This will not be strictly necessary in future versions of the program.

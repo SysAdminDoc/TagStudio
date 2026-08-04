@@ -2228,6 +2228,35 @@ class Library:
         )
         return True
 
+    def upsert_text_field(
+        self, entry_id: int, field_id: FieldID | str, value: str
+    ) -> bool:
+        """Create or update the first text field value for an entry.
+
+        Returns whether the stored value changed. This is used by opt-in metadata workers
+        so repeated runs are idempotent instead of appending duplicate fields.
+        """
+        field_key = field_id.name if isinstance(field_id, FieldID) else field_id
+        with Session(self.engine, expire_on_commit=False) as session:
+            field = session.scalar(
+                select(TextField)
+                .where(TextField.entry_id == entry_id, TextField.type_key == field_key)
+                .order_by(TextField.position, TextField.id)
+            )
+            if field is None:
+                field = TextField(entry_id=entry_id, type_key=field_key, value=value)
+                session.add(field)
+                changed = True
+            else:
+                changed = field.value != value
+                field.value = value
+
+            session.commit()
+
+        if field is not None:
+            self.update_field_position(TextField, field_key, entry_id)
+        return changed
+
     def tag_from_strings(self, strings: list[str] | str) -> list[int]:
         """Create a Tag from a given string."""
         # TODO: Port over tag searching with aliases fallbacks
