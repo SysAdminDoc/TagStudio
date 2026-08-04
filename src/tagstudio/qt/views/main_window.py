@@ -89,6 +89,7 @@ class MainMenuBar(QMenuBar):
     fix_unlinked_entries_action: QAction
     fix_ignored_entries_action: QAction
     fix_dupe_files_action: QAction
+    find_hash_duplicates_action: QAction
     clear_thumb_cache_action: QAction
 
     macros_menu: QMenu
@@ -376,6 +377,13 @@ class MainMenuBar(QMenuBar):
         self.fix_dupe_files_action = QAction(Translations["menu.tools.fix_duplicate_files"], self)
         self.fix_dupe_files_action.setEnabled(False)
         self.tools_menu.addAction(self.fix_dupe_files_action)
+
+        # Find exact duplicate files by content hash
+        self.find_hash_duplicates_action = QAction(
+            Translations["file.hash_duplicates.title"], self
+        )
+        self.find_hash_duplicates_action.setEnabled(False)
+        self.tools_menu.addAction(self.find_hash_duplicates_action)
 
         self.tools_menu.addSeparator()
 

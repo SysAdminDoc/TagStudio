@@ -101,6 +101,8 @@ With TagStudio opened, start by creating a new library or opening an existing on
 
 Libraries under 10,000 files automatically scan for new or modified files when opened. On Windows and Linux, open libraries also watch their configured roots natively, so new files and in-library moves appear without a manual rescan. To run a full refresh manually, select "Refresh Directories" under the File menu or by pressing <kbd>Ctrl</kbd></kbd>+<kbd>R</kbd> (macOS: <kbd>⌘ Command</kbd>+<kbd>R</kbd>).
 
+Use Tools -> Find Duplicate Files to run an exact-content BLAKE3 pass. Results are grouped in a read-only view; TagStudio never deletes or merges files from this scan.
+
 ### Creating Tags
 
 Create a new tag by accessing the "New Tag" option from the Edit menu or by pressing <kbd>Ctrl</kbd>+<kbd>T</kbd> (macOS: <kbd>⌘ Command</kbd>+<kbd>T</kbd>). In the tag creation panel, enter a tag name, optional shorthand name, optional tag aliases, optional parent tags, and an optional color.

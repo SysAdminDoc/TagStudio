@@ -87,6 +87,7 @@ from tagstudio.qt.mixed.drop_import_modal import DropImportModal
 from tagstudio.qt.mixed.fix_dupe_files import FixDupeFilesModal
 from tagstudio.qt.mixed.fix_unlinked import FixUnlinkedEntriesModal
 from tagstudio.qt.mixed.folders_to_tags import FoldersToTagsModal
+from tagstudio.qt.mixed.hash_duplicates import HashDuplicateModal
 from tagstudio.qt.mixed.item_thumb import BadgeType
 from tagstudio.qt.mixed.migration_modal import JsonMigrationModal
 from tagstudio.qt.mixed.progress_bar import ProgressWidget
@@ -194,6 +195,7 @@ class QtDriver(DriverMixin, QObject):
     unlinked_modal: FixUnlinkedEntriesModal
     ignored_modal: FixIgnoredEntriesModal
     dupe_modal: FixDupeFilesModal
+    hash_duplicates_modal: HashDuplicateModal | None = None
     library_info_window: LibraryInfoWindow
 
     applied_theme: Theme
@@ -568,6 +570,15 @@ class QtDriver(DriverMixin, QObject):
 
         self.main_window.menu_bar.fix_dupe_files_action.triggered.connect(create_dupe_files_modal)
 
+        def create_hash_duplicates_modal():
+            if self.hash_duplicates_modal is None:
+                self.hash_duplicates_modal = HashDuplicateModal(self.lib, self)
+            self.hash_duplicates_modal.show()
+
+        self.main_window.menu_bar.find_hash_duplicates_action.triggered.connect(
+            create_hash_duplicates_modal
+        )
+
         # TODO: Move this to a settings screen.
         self.main_window.menu_bar.clear_thumb_cache_action.triggered.connect(
             lambda: self.cache_manager.clear_cache()
@@ -890,6 +901,7 @@ class QtDriver(DriverMixin, QObject):
             self.main_window.menu_bar.fix_unlinked_entries_action.setEnabled(False)
             self.main_window.menu_bar.fix_ignored_entries_action.setEnabled(False)
             self.main_window.menu_bar.fix_dupe_files_action.setEnabled(False)
+            self.main_window.menu_bar.find_hash_duplicates_action.setEnabled(False)
             self.main_window.menu_bar.clear_thumb_cache_action.setEnabled(False)
             self.main_window.menu_bar.folders_to_tags_action.setEnabled(False)
             self.main_window.menu_bar.library_info_action.setEnabled(False)
@@ -1778,6 +1790,7 @@ class QtDriver(DriverMixin, QObject):
         self.main_window.menu_bar.fix_unlinked_entries_action.setEnabled(True)
         self.main_window.menu_bar.fix_ignored_entries_action.setEnabled(True)
         self.main_window.menu_bar.fix_dupe_files_action.setEnabled(True)
+        self.main_window.menu_bar.find_hash_duplicates_action.setEnabled(True)
         self.main_window.menu_bar.clear_thumb_cache_action.setEnabled(True)
         self.main_window.menu_bar.folders_to_tags_action.setEnabled(True)
         self.main_window.menu_bar.library_info_action.setEnabled(True)
